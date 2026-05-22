@@ -9,19 +9,9 @@ require('dotenv').config({ encoding: 'latin1' })
 var morgan = require('morgan');
 var logger = require('./util/logger');
 
-if (process.env.NODE_ENV == "production") {
-    // Hardcoded SSL certificate paths
-    const privateKey = fs.readFileSync('/etc/ssl/private.key', 'utf8').toString();
-    const certificate = fs.readFileSync('/etc/ssl/certificate.crt', 'utf8').toString();
-    const ca = fs.readFileSync('/etc/ssl/ca_bundle.crt', 'utf8').toString();
-
-    const options = { key: privateKey, cert: certificate, ca: ca };
-    server = https.createServer(options, app);
-    logger.info("Running in production with HTTPS");
-} else {
-    server = http.createServer(app);
-    logger.info("Running in development with HTTP");
-} 
+// Nginx handles SSL termination; Node always runs plain HTTP
+server = http.createServer(app);
+logger.info("Running with HTTP (SSL handled by Nginx)"); 
 
 app.use(
     bodyparser.urlencoded({

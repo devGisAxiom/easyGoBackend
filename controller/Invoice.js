@@ -370,6 +370,12 @@ td:last-child {
                     <p>${user.u_address}<br>${user.u_district} – ${user.u_pincode}</p>
                 </div>
                 ` : ``}
+
+                <div class="info-box">
+                    <p><strong>Vehicle:</strong> ${booking.vehicle_number || '—'}</p>
+                    <p><strong>Bike:</strong> ${booking.bike_name || '—'}</p>
+                    <p><strong>Duration:</strong> ${booking.rent_duration_text || '—'}</p>
+                </div>
             </div>
         </div>
 
@@ -381,23 +387,65 @@ td:last-child {
                 <thead>
                     <tr>
                         <th>Booking Date</th>
-                        <th>Rental Amount</th>
-                        <th>Total Amount</th>
+                        <th>Description</th>
+                        <th>Amount</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr class="mobile-card">
-                        <td>
+                        <td rowspan="5" style="vertical-align:top;">
                             <span class="label">Booking Date</span>
                             <span class="value">${booking.booking_date}</span>
                         </td>
                         <td>
-                            <span class="label">Rental Amount</span>
-                            <span class="value">₹${booking.b_rent_amount}</span>
+                            <span class="label">Description</span>
+                            <span class="value">Rental Fee (${booking.rent_duration_text || ''})</span>
                         </td>
                         <td>
-                            <span class="label">Total Amount</span>
-                            <span class="value strong">₹${booking.b_total_amount}</span>
+                            <span class="label">Amount</span>
+                            <span class="value">₹${parseFloat(booking.rd_rent_amount || booking.b_rent_amount).toFixed(2)}</span>
+                        </td>
+                    </tr>
+                    <tr class="mobile-card">
+                        <td>
+                            <span class="label">Description</span>
+                            <span class="value">GST (5%)</span>
+                        </td>
+                        <td>
+                            <span class="label">Amount</span>
+                            <span class="value">₹${parseFloat(booking.rd_rent_gst || 0).toFixed(2)}</span>
+                        </td>
+                    </tr>
+                    <tr class="mobile-card">
+                        <td>
+                            <span class="label">Description</span>
+                            <span class="value">Refundable Deposit</span>
+                        </td>
+                        <td>
+                            <span class="label">Amount</span>
+                            <span class="value">₹${parseFloat(booking.rd_rent_deposit || 0).toFixed(2)}</span>
+                        </td>
+                    </tr>
+                    ${booking.b_fine_amount && parseFloat(booking.b_fine_amount) > 0 ? `
+                    <tr class="mobile-card">
+                        <td>
+                            <span class="label">Description</span>
+                            <span class="value">Fine / Extra Charges</span>
+                        </td>
+                        <td>
+                            <span class="label">Amount</span>
+                            <span class="value">₹${parseFloat(booking.b_fine_amount).toFixed(2)}</span>
+                        </td>
+                    </tr>
+                    ` : ``}
+                    <tr class="mobile-card" style="font-weight:bold;">
+                        <td>
+                            <span class="label">Description</span>
+                            <span class="value strong">Total</span>
+                        </td>
+                        <td>
+                            <span class="label">Amount</span>
+                            <span class="value strong">₹${parseFloat(booking.b_total_amount).toFixed(2)}</span>
                         </td>
                     </tr>
                 </tbody>
@@ -407,7 +455,7 @@ td:last-child {
                 <div class="total-box">
                     <p class="total-paid">
                         <span class="label">Total Paid</span>
-                        <span class="value">₹${booking.b_total_amount}</span>
+                        <span class="value">₹${parseFloat(booking.b_total_amount).toFixed(2)}</span>
                     </p>
                 </div>
             </div>
@@ -428,8 +476,7 @@ td:last-child {
 
         // ✅ Email setup
         const transporter = nodemailer.createTransport({
-            host: "smtp.hostinger.com",
-            port: 587,
+            service: "gmail",
             auth: {
                 user: process.env.EMAIL,
                 pass: process.env.PASSWORD,

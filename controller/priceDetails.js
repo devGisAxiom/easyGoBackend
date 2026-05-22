@@ -5,9 +5,9 @@ module.exports.AddPriceDetails = async (req, res) => {
     try {
         logger.info('AddPriceDetails API called', { body: req.body });
 
-        const { rent_time, duration_text, rent, gst, deposit, total } = req.body;
+        const { rent_time, duration_text, rent, deposit } = req.body;
 
-        if (!rent_time || !duration_text || !rent || !gst || !deposit || !total) {
+        if (!rent_time || !duration_text || !rent || !deposit) {
             logger.warn('AddPriceDetails validation failed');
             return res.send({
                 result: false,
@@ -15,8 +15,11 @@ module.exports.AddPriceDetails = async (req, res) => {
             });
         }
 
+        const computedGst = parseFloat((parseFloat(rent) * 0.05).toFixed(2));
+        const computedTotal = parseFloat((parseFloat(rent) + computedGst + parseFloat(deposit)).toFixed(2));
+
         const newPriceDetails = await model.AddPriceDetails(
-            rent_time, duration_text, rent, gst, deposit, total
+            rent_time, duration_text, rent, computedGst, deposit, computedTotal
         );
 
         if (newPriceDetails.insertId) {
@@ -76,7 +79,7 @@ module.exports.EditPriceDetails = async (req, res) => {
     try {
         logger.info('EditPriceDetails API called', { body: req.body });
 
-        const { price_id, rent_time, duration_text, rent, gst, deposit, total } = req.body;
+        const { price_id, rent_time, duration_text, rent, deposit } = req.body;
 
         if (!price_id) {
             logger.warn('EditPriceDetails: price_id missing');
@@ -95,13 +98,22 @@ module.exports.EditPriceDetails = async (req, res) => {
             });
         }
 
+        const existingRent = parseFloat(checkPrice[0].rent_amount);
+        const existingDeposit = parseFloat(checkPrice[0].rent_deposit);
+        const newRent = rent ? parseFloat(rent) : existingRent;
+        const newDeposit = deposit ? parseFloat(deposit) : existingDeposit;
+        const computedGst = parseFloat((newRent * 0.05).toFixed(2));
+        const computedTotal = parseFloat((newRent + computedGst + newDeposit).toFixed(2));
+
         let updates = [];
         if (rent_time) updates.push(`rent_duration='${rent_time}'`);
         if (duration_text) updates.push(`rent_duration_text='${duration_text}'`);
         if (rent) updates.push(`rent_amount='${rent}'`);
-        if (gst) updates.push(`rent_gst='${gst}'`);
         if (deposit) updates.push(`rent_deposit='${deposit}'`);
-        if (total) updates.push(`rent_total='${total}'`);
+        if (rent || deposit) {
+            updates.push(`rent_gst='${computedGst}'`);
+            updates.push(`rent_total='${computedTotal}'`);
+        }
 
         if (updates.length > 0) {
             let updateQuery = `SET ${updates.join(', ')}`;

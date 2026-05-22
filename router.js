@@ -215,6 +215,31 @@ route.post('/delete/contact', verifyToken, (req, res) => {
 });
 
 // ========================
+// Bike Routes
+// ========================
+const { addbike, listbike, deleteBikes, editbikes } = require('./controller/addbike');
+
+route.post('/add/bike', verifyToken, (req, res) => {
+    logger.info("POST /add/bike called");
+    addbike(req, res);
+});
+
+route.post('/list/bike', verifyToken, (req, res) => {
+    logger.info("POST /list/bike called");
+    listbike(req, res);
+});
+
+route.post('/delete/bike', verifyToken, (req, res) => {
+    logger.info("POST /delete/bike called");
+    deleteBikes(req, res);
+});
+
+route.post('/edit/bike', verifyToken, (req, res) => {
+    logger.info("POST /edit/bike called");
+    editbikes(req, res);
+});
+
+// ========================
 // Other Routes
 // ========================
 const { documents } = require('./controller/documents');
@@ -289,6 +314,21 @@ route.post('/edit/price', verifyToken, (req, res) => {
 route.get('/razorpay/callback', (req, res) => {
     logger.info("GET /razorpay/callback called");
     RazorpayCallback(req, res);
+});
+
+// ========================
+// Payment Reports
+// ========================
+const { paymentReportList, paymentReportExcel } = require('./controller/paymentReport');
+
+route.post('/report/payments', verifyToken, (req, res) => {
+    logger.info("POST /report/payments called");
+    paymentReportList(req, res);
+});
+
+route.post('/report/excel', verifyToken, (req, res) => {
+    logger.info("POST /report/excel called");
+    paymentReportExcel(req, res);
 });
 
 module.exports = route;

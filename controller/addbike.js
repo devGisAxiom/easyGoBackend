@@ -19,7 +19,7 @@ module.exports.addbike = async (req, res) => {
                 })
             }
 
-            let { name, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude } = fields;
+            let { name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude } = fields;
 
             if (!name || !description || !rate || !location || !extras || !milage || !geartype || !fueltype || !bhp || !max_speed || !maintaince_status) {
                 return res.send({
@@ -29,7 +29,7 @@ module.exports.addbike = async (req, res) => {
             }
             let date = moment().format('MM-DD HH:MM:SS')
             // 1️⃣ Insert bike details first
-            const bikeResult = await model.AddBikeQuery(name, description, rate, location, latitude, longitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status);
+            const bikeResult = await model.AddBikeQuery(name, vehicle_number || null, description, rate, location, latitude, longitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status);
             const bike_id = bikeResult.insertId; // get new bike id
             centerList = JSON.parse(centerList)
             for (const centerId of centerList) {
@@ -182,7 +182,7 @@ module.exports.editbikes = async (req, res) => {
                     data: err,
                 });
             }
-            const { b_id, name, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, latitude, longitude, bikecenter, status } = fields;
+            const { b_id, name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, latitude, longitude, bikecenter, status } = fields;
 
             let date = moment().format('MM-DD HH:MM:SS')
 
@@ -203,6 +203,7 @@ module.exports.editbikes = async (req, res) => {
             let updates = [];
 
             if (name) updates.push(`b_name='${name}'`);
+            if (vehicle_number) updates.push(`vehicle_number='${vehicle_number}'`);
             if (description) updates.push(`b_description='${description}'`);
             if (rate) updates.push(`b_price='${rate}'`);
             if (location) updates.push(`b_location='${location}'`);
@@ -247,16 +248,7 @@ module.exports.editbikes = async (req, res) => {
             }
 
 
-            if (files) {
-                const fileKeys = Object.keys(files).filter(item => item !== 'image');
-                console.log("fileKeys :", fileKeys);
-
-                if (fileKeys.length > 0) {
-                    await model.DeleteFilesQuery(b_id, fileKeys);
-                }
-            }
-
-            if (files.image) {
+            if (files && files.image) {
                 const oldPath = files.image.filepath;
                 const fileName = `${date}_${files.originalFilename}`;
                 const newPath = path.join(process.cwd(), '/uploads/addbike/', fileName);
