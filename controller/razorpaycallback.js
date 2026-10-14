@@ -5,6 +5,81 @@ var nodemailer = require('nodemailer')
 var { transporter } = require("../util/mailer");
 const logger = require('../util/logger');
 const notify = require('../util/notification');
+const sms = require('../util/sms');
+const moment = require('moment');
+const bookingModel = require('../model/booking');
+const axios = require('axios');
+
+
+async function fetchAndStorePaymentMode(booking_id, paymentLinkId, paymentId) {
+    try {
+        const key_id     = process.env.RZP_LIVE_KEY_ID     || process.env.RZP_TEST_KEY_ID;
+        const key_secret = process.env.RZP_LIVE_KEY_SECRET || process.env.RZP_TEST_KEY_SECRET;
+
+        if (!key_id || !key_secret) {
+            logger.warn('RazorpayCallback: skip fetchAndStorePaymentMode — keys missing');
+            return;
+        }
+
+        const authHeader = {
+            auth: { username: key_id, password: key_secret },
+            timeout: 10000,
+        };
+
+        let method = null;
+
+        if (paymentId) {
+            const resp = await axios.get(
+                `https://api.razorpay.com/v1/payments/${paymentId}`,
+                authHeader,
+            );
+            method = (resp.data && resp.data.method) ? String(resp.data.method) : null;
+        } else if (paymentLinkId) {
+            const resp = await axios.get(
+                `https://api.razorpay.com/v1/payments?payment_link_id=${encodeURIComponent(paymentLinkId)}`,
+                authHeader,
+            );
+            const items = (resp.data && resp.data.items) || [];
+            const paidItem = items.find((it) => it && it.status === 'captured') || items[0];
+            method = paidItem && paidItem.method ? String(paidItem.method) : null;
+        } else {
+            logger.warn('RazorpayCallback: no razorpay_payment_id or razorpay_payment_link_id in query');
+            return;
+        }
+
+        if (!method) {
+            logger.warn('RazorpayCallback: could not resolve method for booking_id %s', booking_id);
+            return;
+        }
+
+        const displayMode = prettyMode(method);
+        const updateQ = `UPDATE bookings SET b_payment_mode = ? WHERE b_id = ?`;
+        await query(updateQ, [displayMode, booking_id]);
+        logger.info('RazorpayCallback: stored payment_mode=%s for booking_id %s', displayMode, booking_id);
+    } catch (err) {
+        logger.error(
+            'RazorpayCallback: fetchAndStorePaymentMode failed for booking_id %s — %s',
+            booking_id,
+            err.response ? JSON.stringify(err.response.data) : err.message,
+        );
+    }
+}
+
+function prettyMode(raw) {
+    const m = String(raw || '').toLowerCase();
+    const map = {
+        upi: 'UPI',
+        card: 'Card',
+        netbanking: 'Netbanking',
+        wallet: 'Wallet',
+        emi: 'EMI',
+        paylater: 'Pay Later',
+        cardless_emi: 'Cardless EMI',
+        rewards: 'Rewards',
+        bank_transfer: 'Bank Transfer',
+    };
+    return map[m] || raw;
+}
 
 
 module.exports.RazorpayCallback = async (req, res) => {
@@ -17,6 +92,15 @@ module.exports.RazorpayCallback = async (req, res) => {
         logger.info("RazorpayCallback: Payment Paid for booking_id %s", booking_id);
 
         let updateOrder = await UpdateBookingChange(booking_id)
+
+        // Capture payment mode (UPI / Card / Netbanking / Wallet / ...) — fire-and-forget
+        fetchAndStorePaymentMode(
+            booking_id,
+            req.query.razorpay_payment_link_id,
+            req.query.razorpay_payment_id,
+        ).catch((err) => {
+            logger.error('RazorpayCallback: fetchAndStorePaymentMode unhandled error: %s', err.message);
+        });
 
         if (updateOrder.affectedRows > 0) {
             let status = 'Paid'
@@ -46,6 +130,15 @@ module.exports.RazorpayCallback = async (req, res) => {
                 "unread",
                 notification_image = null
             );
+
+            // SMS trigger on payment success — fire-and-forget
+            sendPaymentSuccessSMS({
+                booking_id,
+                user: getUser[0],
+                booking: booking[0],
+            }).catch((err) => {
+                logger.error('Payment success SMS task failed: %s', err.message);
+            });
 
             await transporter.sendMail({
                 from: `EASYGO <${process.env.EMAIL}>`,
@@ -627,3 +720,52 @@ async function GetUser(user_id) {
     var data = await query(Query, [user_id]);
     return data;
 };
+
+async function sendPaymentSuccessSMS({ booking_id, user, booking }) {
+    try {
+        const mobile = user?.u_mobile;
+        const name = user?.u_name || 'Customer';
+        if (!mobile) {
+            logger.warn('SMS payment success: no mobile for booking %s', booking_id);
+            return;
+        }
+
+        const fmtDate = (d) => (d ? moment(d, 'YYYY-MM-DD').format('DD MMM YYYY') : 'N/A');
+        const fmtTime = (t) => (t ? String(t).substring(0, 5) : 'N/A');
+
+        const rentAmount = parseFloat(booking?.b_rent_amount || 0).toFixed(2);
+        const gst = (parseFloat(booking?.b_rent_amount || 0) * 0.05).toFixed(2);
+        const deposit = (parseFloat(booking?.b_total_amount || 0) - parseFloat(booking?.b_rent_amount || 0) - parseFloat(gst)).toFixed(2);
+        const total = parseFloat(booking?.b_total_amount || 0).toFixed(2);
+
+        let vehicleNumber = 'Vehicle';
+        if (booking?.b_bk_id) {
+            try {
+                const bike = await bookingModel.getBikeById(booking.b_bk_id);
+                if (bike) {
+                    vehicleNumber = bike.vehicle_number || bike.b_name || 'Vehicle';
+                }
+            } catch (e) {
+                logger.warn('SMS payment: could not fetch bike: %s', e.message);
+            }
+        } else {
+            logger.info('SMS payment: no bike assigned yet for booking %s, using placeholder', booking_id);
+        }
+
+        const smsVars = [
+            name,
+            vehicleNumber,
+            `${fmtDate(booking?.b_pickup_date)} ${fmtTime(booking?.b_picup_time)}`,
+            `${fmtDate(booking?.b_drop_date)} ${fmtTime(booking?.b_drop_time)}`,
+            'As per booking',
+            rentAmount,
+            gst,
+            deposit,
+            total,
+        ];
+
+        await sms.sendSMS('BOOKING_CONFIRMED', mobile, smsVars, booking_id);
+    } catch (err) {
+        logger.error('sendPaymentSuccessSMS error: %s', err.message);
+    }
+}

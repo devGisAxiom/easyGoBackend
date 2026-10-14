@@ -5,73 +5,87 @@ const path = require("path");
 let moment = require('moment')
 const logger = require('../util/logger');
 
+function ensureUploadDir(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+}
+
 module.exports.addbike = async (req, res) => {
 
     try {
         const form = new formidable.IncomingForm({ multiples: true });
         form.parse(req, async (err, fields, files) => {
-            if (err) {
-                logger.error("File Upload Failed in addbike: ", err);
-                return res.send({
-                    result: false,
-                    message: 'File Upload Failed!',
-                    data: err,
-                })
-            }
-
-            let { name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude } = fields;
-
-            if (!name || !description || !rate || !location || !extras || !milage || !geartype || !fueltype || !bhp || !max_speed || !maintaince_status) {
-                return res.send({
-                    result: false,
-                    message: "insufficent parameter",
-                })
-            }
-            let date = moment().format('MM-DD HH:MM:SS')
-            // 1️⃣ Insert bike details first
-            const bikeResult = await model.AddBikeQuery(name, vehicle_number || null, description, rate, location, latitude, longitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status);
-            const bike_id = bikeResult.insertId; // get new bike id
-            centerList = JSON.parse(centerList)
-            for (const centerId of centerList) {
-                logger.info("Adding bike to centerId: %s", centerId);
-
-                await model.AddBikeresultCenterQuery(bike_id, centerId);
-            }
-
-            if (files && files.image) {
-                // Normalize to array: handles both single and multiple image uploads
-                const imageFiles = Array.isArray(files.image) ? files.image : [files.image];
-
-                for (const file of imageFiles) {
-                    if (!file || !file.filepath || !file.originalFilename) continue;
-
-                    const oldPath = file.filepath;
-                    const filename = `${date}_${file.originalFilename}`;
-                    const newPath = path.join(process.cwd(), '/uploads/bikes', filename);
-
-                    const rawData = fs.readFileSync(oldPath);
-                    fs.writeFileSync(newPath, rawData);
-
-                    const imagePath = "/uploads/bikes/" + filename;
-
-                    var insertResult = await model.AddBikeimageQuery(bike_id, imagePath);
-
-                    // logger.info(insertResult, "image insert result");
-                    logger.info("Bike image insert result: %o", insertResult);
-                }
-
-                if (insertResult.affectedRows > 0) {
-
-                    return res.status(200).json({
-                        result: true,
-                        message: 'bike added successfully',
-                    });
-                } else {
-                    return res.status(500).json({
+            try {
+                if (err) {
+                    logger.error("File Upload Failed in addbike: ", err);
+                    return res.send({
                         result: false,
-                        message: 'Failed to add bike deatils',
+                        message: 'File Upload Failed!',
+                        data: err,
                     });
                 }
+
+                let { name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude } = fields;
+
+                if (!name || !description || !rate || !location || !extras || !milage || !geartype || !fueltype || !bhp || !max_speed || !maintaince_status) {
+                    return res.send({
+                        result: false,
+                        message: "insufficent parameter",
+                    });
+                }
+
+                const bikesUploadDir = path.join(process.cwd(), 'uploads', 'bikes');
+                ensureUploadDir(bikesUploadDir);
+
+                let date = moment().format('MM-DD_HH-mm-ss');
+                const safeLatitude = latitude && latitude !== 'null' ? latitude : '0';
+                const safeLongitude = longitude && longitude !== 'null' ? longitude : '0';
+                // 1️⃣ Insert bike details first
+                const bikeResult = await model.AddBikeQuery(name, vehicle_number || null, description, rate, location, safeLatitude, safeLongitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status);
+                const bike_id = bikeResult.insertId; // get new bike id
+                centerList = centerList ? JSON.parse(centerList) : [];
+                for (const centerId of centerList) {
+                    logger.info("Adding bike to centerId: %s", centerId);
+
+                    await model.AddBikeresultCenterQuery(bike_id, centerId);
+                }
+
+                let imageSaved = false;
+                if (files && files.image) {
+                    // Normalize to array: handles both single and multiple image uploads
+                    const imageFiles = Array.isArray(files.image) ? files.image : [files.image];
+
+                    for (const file of imageFiles) {
+                        if (!file || !file.filepath || !file.originalFilename) continue;
+
+                        const oldPath = file.filepath;
+                        const filename = `${date}_${file.originalFilename}`;
+                        const newPath = path.join(bikesUploadDir, filename);
+
+                        const rawData = fs.readFileSync(oldPath);
+                        fs.writeFileSync(newPath, rawData);
+
+                        const imagePath = "/uploads/bikes/" + filename;
+
+                        const insertResult = await model.AddBikeimageQuery(bike_id, imagePath);
+                        imageSaved = imageSaved || insertResult?.affectedRows > 0;
+
+                        logger.info("Bike image insert result: %o", insertResult);
+                    }
+                }
+
+                return res.status(200).json({
+                    result: true,
+                    message: imageSaved ? 'bike added successfully' : 'bike added successfully',
+                });
+            } catch (error) {
+                logger.error("Error while saving bike: ", error);
+                return res.status(500).json({
+                    result: false,
+                    message: 'Failed to add bike details',
+                    data: error.message,
+                });
             }
 
 
@@ -184,7 +198,10 @@ module.exports.editbikes = async (req, res) => {
             }
             const { b_id, name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, latitude, longitude, bikecenter, status } = fields;
 
-            let date = moment().format('MM-DD HH:MM:SS')
+            const addBikeUploadDir = path.join(process.cwd(), 'uploads', 'addbike');
+            ensureUploadDir(addBikeUploadDir);
+
+            let date = moment().format('MM-DD_HH-mm-ss')
 
             if (!b_id) {
                 return res.send({
@@ -250,8 +267,8 @@ module.exports.editbikes = async (req, res) => {
 
             if (files && files.image) {
                 const oldPath = files.image.filepath;
-                const fileName = `${date}_${files.originalFilename}`;
-                const newPath = path.join(process.cwd(), '/uploads/addbike/', fileName);
+                const fileName = `${date}_${files.image.originalFilename}`;
+                const newPath = path.join(addBikeUploadDir, fileName);
 
                 const rawData = fs.readFileSync(oldPath);
                 fs.writeFileSync(newPath, rawData);
@@ -274,13 +291,88 @@ module.exports.editbikes = async (req, res) => {
         });
 
     } catch (error) {
+        logger.error('Error in editbikes: ', error);
         return res.send({
             result: false,
             message: error.message
         });
     }
-
 }
+
+module.exports.getAvailableBikes = async (req, res) => {
+    try {
+        const { pickup_date, pickup_time, drop_date, drop_time, exclude_b_id } = req.body || {};
+
+        if (!pickup_date || !pickup_time || !drop_date || !drop_time) {
+            return res.send({
+                result: false,
+                message: 'pickup_date, pickup_time, drop_date, drop_time are required',
+            });
+        }
+
+        const pickupDt = `${pickup_date} ${String(pickup_time).substring(0, 8)}`;
+        const dropDt = `${drop_date} ${String(drop_time).substring(0, 8)}`;
+
+        const params = [dropDt, pickupDt];
+        let excludeClause = '';
+        if (exclude_b_id) {
+            excludeClause = 'AND b_id != ?';
+            params.push(Number(exclude_b_id));
+        }
+
+        const Query = `
+            SELECT b_id, b_name, vehicle_number, b_location, b_fueltype, b_geartype, maintaince_status
+            FROM bikes
+            WHERE b_status = 'Active'
+              AND (maintaince_status IS NULL
+                   OR maintaince_status NOT IN ('maintenance', 'damaged', 'Damaged', 'MAINTENANCE'))
+              AND b_id NOT IN (
+                  SELECT bk.b_bk_id FROM bookings bk
+                  WHERE bk.b_bk_id IS NOT NULL
+                    AND bk.b_status IN ('approved', 'onride', 'extendedreq')
+                    AND TIMESTAMP(bk.b_pickup_date, SUBSTRING_INDEX(bk.b_picup_time, '.', 1)) < ?
+                    AND TIMESTAMP(bk.b_drop_date,   SUBSTRING_INDEX(bk.b_drop_time,   '.', 1)) > ?
+              )
+              ${exclude_b_id ? `AND b_id != ${Number(exclude_b_id)}` : ''}
+            ORDER BY b_name ASC
+        `;
+
+        const list = await model.getAvailableBikesQuery(Query, [dropDt, pickupDt]);
+
+        return res.send({
+            result: true,
+            message: list.length > 0 ? 'Available bikes retrieved' : 'No bikes available for this time window',
+            list,
+            count: list.length,
+        });
+    } catch (error) {
+        logger.error('Error in getAvailableBikes: ', error);
+        return res.send({
+            result: false,
+            message: error.message,
+        });
+    }
+};
+
+module.exports.checkBikeAvailability = async (bk_id, pickup_date, pickup_time, drop_date, drop_time) => {
+    try {
+        const pickupDt = `${pickup_date} ${String(pickup_time).substring(0, 8)}`;
+        const dropDt = `${drop_date} ${String(drop_time).substring(0, 8)}`;
+
+        const Query = `
+            SELECT COUNT(*) AS conflict_count FROM bookings
+            WHERE b_bk_id = ?
+              AND b_status IN ('approved', 'onride', 'extendedreq')
+              AND TIMESTAMP(b_pickup_date, SUBSTRING_INDEX(b_picup_time, '.', 1)) < ?
+              AND TIMESTAMP(b_drop_date,   SUBSTRING_INDEX(b_drop_time,   '.', 1)) > ?
+        `;
+        const rows = await model.checkBikeAvailabilityQuery(Query, [Number(bk_id), dropDt, pickupDt]);
+        return rows[0]?.conflict_count === 0;
+    } catch (err) {
+        logger.error('checkBikeAvailability error: %s', err.message);
+        return false;
+    }
+};
 
 
 

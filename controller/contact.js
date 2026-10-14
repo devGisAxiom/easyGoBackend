@@ -1,10 +1,11 @@
-const model = require('../model/contact');
-var nodemailer = require("nodemailer");
+const model = require("../model/contact");
 var formidable = require("formidable");
 var fs = require("fs");
 var path = require("path");
-const logger = require('../util/logger');
+const logger = require("../util/logger");
 const { v4: uuidv4 } = require("uuid"); // npm install uuid
+// FIX: Use the shared Gmail mailer (works in ~1s) instead of broken smtp.hostinger.com
+const { transporter } = require("../util/mailer");
 
 // module.exports.ContactUs = async (req, res) => {
 //     try {
@@ -206,109 +207,113 @@ const { v4: uuidv4 } = require("uuid"); // npm install uuid
 //     }
 // };
 
-
-
 module.exports.ContactUs = async (req, res) => {
-    try {
-        logger.info("ContactUs API called");
+  try {
+    logger.info("ContactUs API called");
 
-        const form = new formidable.IncomingForm({ multiples: true }); // allow multiple files
+    const form = new formidable.IncomingForm({ multiples: true }); // allow multiple files
 
-        form.parse(req, async (err, fields, files) => {
-            if (err) {
-                logger.error("ContactUs file upload failed", { error: err.message });
-                return res.send({
-                    result: false,
-                    message: 'File upload failed!',
-                });
+    form.parse(req, async (err, fields, files) => {
+      if (err) {
+        logger.error("ContactUs file upload failed", { error: err.message });
+        return res.send({
+          result: false,
+          message: "File upload failed!",
+        });
+      }
+
+      let { name, email, message, phonenumber, issuetype } = fields;
+
+      if (!name || !email || !phonenumber || !issuetype) {
+        logger.warn("ContactUs validation failed", { fields });
+        return res.send({
+          result: false,
+          message: "insufficient parameters",
+        });
+      }
+
+      message = message || "no message";
+
+      // -----------------------------
+      // Save contact in DB
+      // -----------------------------
+      const contactInsert = await model.addcontactQuery(
+        name,
+        email,
+        message,
+        phonenumber,
+        issuetype,
+      );
+
+      const c_id = contactInsert.insertId;
+      logger.info("Contact created successfully", { contactId: c_id, email });
+
+      // -----------------------------
+      // Image upload + prepare mail attachments
+      // -----------------------------
+      let mailAttachments = [];
+
+      if (files?.image) {
+        const imageFiles = Array.isArray(files.image)
+          ? files.image
+          : [files.image];
+
+        for (const file of imageFiles) {
+          if (!file?.filepath || !file?.originalFilename) continue;
+
+          try {
+            const uploadDir = path.join(process.cwd(), "uploads/contact");
+
+            // Ensure upload directory exists
+            if (!fs.existsSync(uploadDir)) {
+              fs.mkdirSync(uploadDir, { recursive: true });
             }
 
-            let { name, email, message, phonenumber, issuetype } = fields;
+            const newPath = path.join(uploadDir, file.originalFilename);
 
-            if (!name || !email || !phonenumber || !issuetype) {
-                logger.warn("ContactUs validation failed", { fields });
-                return res.send({
-                    result: false,
-                    message: "insufficient parameters",
-                });
-            }
+            fs.writeFileSync(newPath, fs.readFileSync(file.filepath));
 
-            message = message || "no message";
+            const imagePath = "/uploads/contact/" + file.originalFilename;
+            await model.AddcontactimageQuery(c_id, imagePath);
 
-            // -----------------------------
-            // Save contact in DB
-            // -----------------------------
-            const contactInsert = await model.addcontactQuery(
-                name,
-                email,
-                message,
-                phonenumber,
-                issuetype
-            );
+            // Generate a unique cid for inline embedding
+            const cid = uuidv4();
 
-            const c_id = contactInsert.insertId;
-            logger.info("Contact created successfully", { contactId: c_id, email });
+            mailAttachments.push({
+              filename: file.originalFilename,
+              path: newPath,
+              cid: cid,
+            });
 
-            // -----------------------------
-            // Image upload + prepare mail attachments
-            // -----------------------------
-            let mailAttachments = [];
+            logger.info("Contact image saved", {
+              contactId: c_id,
+              image: file.originalFilename,
+            });
+          } catch (imgErr) {
+            logger.error("Contact image upload failed", {
+              contactId: c_id,
+              error: imgErr.message,
+            });
+          }
+        }
+      }
 
-            if (files?.image) {
-                const imageFiles = Array.isArray(files.image)
-                    ? files.image
-                    : [files.image];
+      // -----------------------------
+      // Prepare email HTML content
+      // -----------------------------
+      let imagesHtml = "";
+      if (mailAttachments.length > 0) {
+        imagesHtml =
+          `<p><strong>Attached Images:</strong></p>` +
+          mailAttachments
+            .map(
+              (att) =>
+                `<img src="cid:${att.cid}" style="max-width:300px; margin:10px 0;"/>`,
+            )
+            .join("");
+      }
 
-                for (const file of imageFiles) {
-                    if (!file?.filepath || !file?.originalFilename) continue;
-
-                    try {
-                        const uploadDir = path.join(process.cwd(), "uploads/contact");
-
-                        // Ensure upload directory exists
-                        if (!fs.existsSync(uploadDir)) {
-                            fs.mkdirSync(uploadDir, { recursive: true });
-                        }
-
-                        const newPath = path.join(uploadDir, file.originalFilename);
-
-                        fs.writeFileSync(newPath, fs.readFileSync(file.filepath));
-
-                        const imagePath = "/uploads/contact/" + file.originalFilename;
-                        await model.AddcontactimageQuery(c_id, imagePath);
-
-                        // Generate a unique cid for inline embedding
-                        const cid = uuidv4();
-
-                        mailAttachments.push({
-                            filename: file.originalFilename,
-                            path: newPath,
-                            cid: cid
-                        });
-
-                        logger.info("Contact image saved", {
-                            contactId: c_id,
-                            image: file.originalFilename
-                        });
-                    } catch (imgErr) {
-                        logger.error("Contact image upload failed", {
-                            contactId: c_id,
-                            error: imgErr.message
-                        });
-                    }
-                }
-            }
-
-            // -----------------------------
-            // Prepare email HTML content
-            // -----------------------------
-            let imagesHtml = "";
-            if (mailAttachments.length > 0) {
-                imagesHtml = `<p><strong>Attached Images:</strong></p>` +
-                    mailAttachments.map(att => `<img src="cid:${att.cid}" style="max-width:300px; margin:10px 0;"/>`).join('');
-            }
-
-            let htmlcontent = `<!DOCTYPE html>
+      let htmlcontent = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -369,139 +374,127 @@ ${imagesHtml}
 </body>
 </html>`;
 
-            // -----------------------------
-            // Nodemailer transporter
-            // -----------------------------
-            let transporter = nodemailer.createTransport({
-                host: "smtp.hostinger.com",
-                port: 587,
-                secure: false,
-                auth: {
-                    user: process.env.EMAIL,
-                    pass: process.env.PASSWORD,
-                },
-            });
+      // FIX: Send HTTP response FIRST so client doesn't wait for email
+      res.send({
+        status: true,
+        result: true,
+        message: "Mail sent successfully",
+      });
 
-            try {
-                await transporter.sendMail({
-                    from: `EASYGO <${process.env.EMAIL}>`,
-                    to: process.env.ADMIN_EMAIL,
-                    subject: `New Enquiry From: ${name}`,
-                    html: htmlcontent,
-                    attachments: mailAttachments // ✅ images embedded inline
-                });
+      // FIX: Send contact email in background (errors are logged but don't block response)
+      setImmediate(async () => {
+        try {
+          await transporter.sendMail({
+            from: `EASYGO <${process.env.EMAIL}>`,
+            to: process.env.ADMIN_EMAIL,
+            subject: `New Enquiry From: ${name}`,
+            html: htmlcontent,
+            attachments: mailAttachments, // ✅ images embedded inline
+          });
 
-                logger.info("Contact email sent", {
-                    to: process.env.ADMIN_EMAIL,
-                    contactId: c_id
-                });
-            } catch (mailErr) {
-                logger.error("Email sending failed", {
-                    error: mailErr.message
-                });
-            }
-
-            return res.send({
-                status: true,
-                message: "Mail sent successfully",
-            });
-        });
-
-    } catch (error) {
-        logger.error("ContactUs unexpected error", { error: error.message });
-        return res.send({
-            result: false,
-            message: error.message,
-        });
-    }
+          logger.info("Contact email sent", {
+            to: process.env.ADMIN_EMAIL,
+            contactId: c_id,
+          });
+        } catch (mailErr) {
+          logger.error("Contact email FAILED", {
+            to: process.env.ADMIN_EMAIL,
+            contactId: c_id,
+            error: mailErr.message,
+          });
+        }
+      });
+    });
+  } catch (error) {
+    logger.error("ContactUs unexpected error", { error: error.message });
+    return res.send({
+      result: false,
+      message: error.message,
+    });
+  }
 };
 
-
-
 module.exports.listcontact = async (req, res) => {
-    try {
-        const { role } = req.user || {};
-        logger.info("ListContact API called", { role });
+  try {
+    const { role } = req.user || {};
+    logger.info("ListContact API called", { role });
 
-        if (role !== "admin") {
-            logger.warn("Unauthorized contact list access attempt");
-            return res.send({
-                result: false,
-                message: "you are not authorized",
-            });
-        }
-
-        let listcontact = await model.listcontactQuery();
-
-        if (listcontact.length > 0) {
-            logger.info("Contact list retrieved", { count: listcontact.length });
-            return res.send({
-                result: true,
-                message: "data retrieved",
-                list: listcontact,
-            });
-        }
-
-        logger.warn("Contact list empty");
-        return res.send({
-            result: false,
-            messsage: "data not found",
-        });
-
-    } catch (error) {
-        logger.error("ListContact error", { error: error.message });
-        return res.send({
-            result: false,
-            message: error.message,
-        });
+    if (role !== "admin") {
+      logger.warn("Unauthorized contact list access attempt");
+      return res.send({
+        result: false,
+        message: "you are not authorized",
+      });
     }
+
+    let listcontact = await model.listcontactQuery();
+
+    if (listcontact.length > 0) {
+      logger.info("Contact list retrieved", { count: listcontact.length });
+      return res.send({
+        result: true,
+        message: "data retrieved",
+        list: listcontact,
+      });
+    }
+
+    logger.warn("Contact list empty");
+    return res.send({
+      result: false,
+      messsage: "data not found",
+    });
+  } catch (error) {
+    logger.error("ListContact error", { error: error.message });
+    return res.send({
+      result: false,
+      message: error.message,
+    });
+  }
 };
 
 module.exports.deletecontact = async (req, res) => {
-    try {
-        const { c_id } = req.body;
-        logger.info("DeleteContact API called", { c_id });
+  try {
+    const { c_id } = req.body;
+    logger.info("DeleteContact API called", { c_id });
 
-        if (!c_id) {
-            logger.warn("DeleteContact failed: missing c_id");
-            return res.send({
-                result: false,
-                message: "failed to delete contact",
-            });
-        }
-
-        let checkcontact = await model.checkcontactQuery(c_id);
-
-        if (checkcontact.length === 0) {
-            logger.warn("DeleteContact failed: contact not found", { c_id });
-            return res.send({
-                result: false,
-                message: "missing contact id",
-            });
-        }
-
-        let deletesection = await model.removecontactQuery(c_id);
-
-        if (deletesection.affectedRows > 0) {
-            logger.info("Contact deleted successfully", { c_id });
-            return res.send({
-                result: true,
-                message: "contact deleted successfully"
-            });
-        }
-
-        logger.error("DeleteContact DB failure", { c_id });
-        return res.send({
-            result: false,
-            message: "failed to delete contact",
-        });
-
-    } catch (error) {
-        logger.error("DeleteContact error", { error: error.message });
-        return res.send({
-            result: false,
-            message: error.message,
-        });
+    if (!c_id) {
+      logger.warn("DeleteContact failed: missing c_id");
+      return res.send({
+        result: false,
+        message: "failed to delete contact",
+      });
     }
-};
 
+    let checkcontact = await model.checkcontactQuery(c_id);
+
+    if (checkcontact.length === 0) {
+      logger.warn("DeleteContact failed: contact not found", { c_id });
+      return res.send({
+        result: false,
+        message: "missing contact id",
+      });
+    }
+
+    let deletesection = await model.removecontactQuery(c_id);
+
+    if (deletesection.affectedRows > 0) {
+      logger.info("Contact deleted successfully", { c_id });
+      return res.send({
+        result: true,
+        message: "contact deleted successfully",
+      });
+    }
+
+    logger.error("DeleteContact DB failure", { c_id });
+    return res.send({
+      result: false,
+      message: "failed to delete contact",
+    });
+  } catch (error) {
+    logger.error("DeleteContact error", { error: error.message });
+    return res.send({
+      result: false,
+      message: error.message,
+    });
+  }
+};

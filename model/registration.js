@@ -19,9 +19,9 @@ module.exports.CheckJwtToken = async (token, user_id) => {
     return await query(Query, [token, user_id])
 }
 
-module.exports.AddUser = async (name, email, hashedpasssword, mobile, date, token, tokenExpiry) => {
-    var Query = `insert into user(u_name,u_email,u_password,u_mobile,u_joindate,u_token,u_token_expiry)values(?,?,?,?,?,?,?)`;
-    var data = await query(Query, [name, email, hashedpasssword, mobile, date, token, tokenExpiry])
+module.exports.AddUser = async (name, email, hashedpasssword, mobile, date, token, tokenExpiry, address = '', state = '', district = '', pincode = '') => {
+    var Query = `insert into user(u_name,u_email,u_password,u_mobile,u_joindate,u_token,u_token_expiry,u_address,u_state,u_district,u_pincode)values(?,?,?,?,?,?,?,?,?,?,?)`;
+    var data = await query(Query, [name, email, hashedpasssword, mobile, date, token, tokenExpiry, address, state, district, pincode])
     return data;
 }
 

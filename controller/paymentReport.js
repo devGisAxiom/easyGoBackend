@@ -2,6 +2,7 @@ const model = require('../model/paymentReport');
 const ExcelJS = require('exceljs');
 const moment = require('moment');
 const logger = require('../util/logger');
+const { sendNightlyPaymentReport } = require('../util/nightlyPaymentReport');
 
 function buildCondition(from_date, to_date) {
     const parts = [];
@@ -61,7 +62,13 @@ module.exports.paymentReportExcel = async (req, res) => {
             { header: 'Fine (Rs)',       key: 'b_fine_amount',       width: 12 },
             { header: 'Total (Rs)',      key: 'b_total_amount',      width: 12 },
             { header: 'Payment Status', key: 'b_payment_status',    width: 16 },
+            { header: 'Payment Mode',   key: 'payment_mode',        width: 16 },
             { header: 'Booking Status', key: 'b_status',            width: 16 },
+            { header: 'Deposit Returned?', key: 'deposit_returned',  width: 16 },
+            { header: 'Deposit Returned (Rs)', key: 'deposit_returned_amount', width: 18 },
+            { header: 'GPay Ref',        key: 'deposit_gpay_ref',    width: 22 },
+            { header: 'Returned At',     key: 'deposit_returned_at', width: 18 },
+            { header: 'Returned By',     key: 'deposit_returned_by', width: 16 },
         ];
 
         // ── Style header row ──────────────────────────────────────────────────
@@ -80,7 +87,11 @@ module.exports.paymentReportExcel = async (req, res) => {
         // ── Data rows ─────────────────────────────────────────────────────────
         rows.forEach((row, i) => {
             const rent = parseFloat(row.b_rent_amount || 0);
-            const gst  = parseFloat((rent * 0.05).toFixed(2));
+            const gst = parseFloat(
+                row.rent_gst !== undefined && row.rent_gst !== null
+                    ? row.rent_gst
+                    : (rent * 0.05).toFixed(2)
+            );
 
             const dataRow = sheet.addRow({
                 b_id:               row.b_id,
@@ -106,7 +117,14 @@ module.exports.paymentReportExcel = async (req, res) => {
                 b_fine_amount:      parseFloat(row.b_fine_amount  || 0),
                 b_total_amount:     parseFloat(row.b_total_amount || 0),
                 b_payment_status:   row.b_payment_status || '',
+                payment_mode:       row.b_payment_mode || '',
                 b_status:           row.b_status           || '',
+                // Deposit return columns (SRS §7)
+                deposit_returned:   row.deposit_gpay_ref ? 'Yes' : 'No',
+                deposit_returned_amount: parseFloat(row.deposit_returned_amount || 0),
+                deposit_gpay_ref:   row.deposit_gpay_ref    || '',
+                deposit_returned_at: row.deposit_returned_at ? moment(row.deposit_returned_at).format('DD/MM/YYYY HH:mm') : '',
+                deposit_returned_by: row.deposit_returned_by || '',
             });
 
             const fillColor = i % 2 === 0 ? 'FFFFFFFF' : 'FFF1F5FF';
@@ -135,12 +153,16 @@ module.exports.paymentReportExcel = async (req, res) => {
             const totalRent    = sum('b_rent_amount');
             const totalDeposit = sum('rent_deposit');
             const totalFine    = sum('b_fine_amount');
+            const totalGst     = rows.reduce(
+                (s, r) => s + parseFloat(r.rent_gst !== undefined && r.rent_gst !== null ? r.rent_gst : (parseFloat(r.b_rent_amount || 0) * 0.05).toFixed(2)),
+                0
+            );
             const grandTotal   = sum('b_total_amount');
 
             const totalsRow = sheet.addRow({
                 b_id:          'TOTAL',
                 b_rent_amount: parseFloat(totalRent.toFixed(2)),
-                gst:           parseFloat((totalRent * 0.05).toFixed(2)),
+                gst:           parseFloat(totalGst.toFixed(2)),
                 rent_deposit:  parseFloat(totalDeposit.toFixed(2)),
                 b_fine_amount: parseFloat(totalFine.toFixed(2)),
                 b_total_amount:parseFloat(grandTotal.toFixed(2)),
@@ -170,5 +192,21 @@ module.exports.paymentReportExcel = async (req, res) => {
     } catch (error) {
         logger.error('Payment report excel error: %s', error.message);
         return res.status(500).send({ result: false, message: error.message });
+    }
+};
+
+module.exports.paymentReportSendNow = async (req, res) => {
+    try {
+        await sendNightlyPaymentReport();
+        return res.send({
+            result: true,
+            message: 'Payment report email sent successfully',
+        });
+    } catch (error) {
+        logger.error('Payment report send-now error: %s', error.message);
+        return res.status(500).send({
+            result: false,
+            message: error.message,
+        });
     }
 };

@@ -24,7 +24,8 @@ const verifyToken = async (req, res, next) => {
 
         } catch (err) {
             return res.status(498).json({
-                status: "token_expired",
+                result: false,
+                code: 'TOKEN_EXPIRED',
                 message: "Authentication failed: Token expired"
             });
         }
@@ -35,6 +36,7 @@ const verifyToken = async (req, res, next) => {
         if (!checkToken || checkToken.length === 0) {
             return res.status(401).json({
                 result: false,
+                code: 'INVALID_TOKEN',
                 message: "Invalid Token",
             });
         }
@@ -45,6 +47,7 @@ const verifyToken = async (req, res, next) => {
         if (!userData || userData.length === 0) {
             return res.status(401).json({
                 result: false,
+                code: 'USER_NOT_FOUND',
                 message: "User not found. Invalid user id",
             });
         }

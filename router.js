@@ -91,7 +91,7 @@
 const express = require("express");
 const route = express.Router();
 const logger = require('./util/logger'); // make sure path is correct
-const { verifyToken } = require('./middleware/auth'); // Auth middleware
+const { verifyToken, Adminauthorize } = require('./middleware/auth'); // Auth middleware
 
 // ========================
 // Auth Routes
@@ -217,7 +217,7 @@ route.post('/delete/contact', verifyToken, (req, res) => {
 // ========================
 // Bike Routes
 // ========================
-const { addbike, listbike, deleteBikes, editbikes } = require('./controller/addbike');
+const { addbike, listbike, deleteBikes, editbikes, getAvailableBikes } = require('./controller/addbike');
 
 route.post('/add/bike', verifyToken, (req, res) => {
     logger.info("POST /add/bike called");
@@ -237,6 +237,11 @@ route.post('/delete/bike', verifyToken, (req, res) => {
 route.post('/edit/bike', verifyToken, (req, res) => {
     logger.info("POST /edit/bike called");
     editbikes(req, res);
+});
+
+route.post('/list/available-bikes', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /list/available-bikes called");
+    getAvailableBikes(req, res);
 });
 
 // ========================
@@ -319,7 +324,7 @@ route.get('/razorpay/callback', (req, res) => {
 // ========================
 // Payment Reports
 // ========================
-const { paymentReportList, paymentReportExcel } = require('./controller/paymentReport');
+const { paymentReportList, paymentReportExcel, paymentReportSendNow } = require('./controller/paymentReport');
 
 route.post('/report/payments', verifyToken, (req, res) => {
     logger.info("POST /report/payments called");
@@ -329,6 +334,32 @@ route.post('/report/payments', verifyToken, (req, res) => {
 route.post('/report/excel', verifyToken, (req, res) => {
     logger.info("POST /report/excel called");
     paymentReportExcel(req, res);
+});
+
+route.post('/report/send-now', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /report/send-now called");
+    paymentReportSendNow(req, res);
+});
+
+// ========================
+// Deposit Returns (SRS §7)
+// ========================
+const { addDepositReturn } = require('./controller/add_deposit_return');
+const { listDepositReturns, getDepositReturn } = require('./controller/list_deposit_returns');
+
+route.post('/add/deposit-return', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /add/deposit-return called");
+    addDepositReturn(req, res);
+});
+
+route.post('/list/deposit-returns', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /list/deposit-returns called");
+    listDepositReturns(req, res);
+});
+
+route.post('/get/deposit-return', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /get/deposit-return called");
+    getDepositReturn(req, res);
 });
 
 module.exports = route;

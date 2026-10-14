@@ -1,6 +1,21 @@
 const model = require('../model/priceDetails');
 const logger = require('../util/logger');
 
+const toPaise = (value) => Math.round(Number(value || 0) * 100);
+const fromPaise = (paise) => Number((paise / 100).toFixed(2));
+
+function calculatePriceTotals(rentValue, depositValue) {
+    const rentPaise = toPaise(rentValue);
+    const depositPaise = toPaise(depositValue);
+    const gstPaise = Math.round(rentPaise * 0.05);
+    const totalPaise = rentPaise + gstPaise + depositPaise;
+
+    return {
+        computedGst: fromPaise(gstPaise),
+        computedTotal: fromPaise(totalPaise),
+    };
+}
+
 module.exports.AddPriceDetails = async (req, res) => {
     try {
         logger.info('AddPriceDetails API called', { body: req.body });
@@ -15,8 +30,7 @@ module.exports.AddPriceDetails = async (req, res) => {
             });
         }
 
-        const computedGst = parseFloat((parseFloat(rent) * 0.05).toFixed(2));
-        const computedTotal = parseFloat((parseFloat(rent) + computedGst + parseFloat(deposit)).toFixed(2));
+        const { computedGst, computedTotal } = calculatePriceTotals(rent, deposit);
 
         const newPriceDetails = await model.AddPriceDetails(
             rent_time, duration_text, rent, computedGst, deposit, computedTotal
@@ -102,8 +116,7 @@ module.exports.EditPriceDetails = async (req, res) => {
         const existingDeposit = parseFloat(checkPrice[0].rent_deposit);
         const newRent = rent ? parseFloat(rent) : existingRent;
         const newDeposit = deposit ? parseFloat(deposit) : existingDeposit;
-        const computedGst = parseFloat((newRent * 0.05).toFixed(2));
-        const computedTotal = parseFloat((newRent + computedGst + newDeposit).toFixed(2));
+        const { computedGst, computedTotal } = calculatePriceTotals(newRent, newDeposit);
 
         let updates = [];
         if (rent_time) updates.push(`rent_duration='${rent_time}'`);

@@ -126,3 +126,13 @@ module.exports.DeleteFilesQuery = async (b_id, fileKeys) => {
   var data = await query(Query, [b_id]);
   return data;
 };
+
+module.exports.getAvailableBikesQuery = async (Query, params) => {
+  var data = await query(Query, params);
+  return data;
+};
+
+module.exports.checkBikeAvailabilityQuery = async (Query, params) => {
+  var data = await query(Query, params);
+  return data;
+};

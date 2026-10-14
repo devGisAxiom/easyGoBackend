@@ -26,6 +26,21 @@ module.exports.cancelBooking = async (req, res) => {
             });
         }
 
+        // Refuse to cancel unpaid bookings. These are orphan payment
+        // intents that should never have surfaced in the user app.
+        // No money was taken → no refund flow, no cancellation policy.
+        if (String(booking[0].b_payment_status || '').toLowerCase() !== 'paid') {
+            logger.warn(
+                "Cancel Booking refused: payment not completed (ID: %s, payment_status: %s)",
+                b_id,
+                booking[0].b_payment_status,
+            );
+            return res.send({
+                result: false,
+                message: "This booking cannot be cancelled because payment was not completed.",
+            });
+        }
+
         // Check if pickup date is more than 7 days ago
         const pickupDate = moment(booking[0].pickup_date, "YYYY-MM-DD");
         const now = moment();

@@ -48,7 +48,8 @@ CREATE TABLE `bikes` (
   `b_reviews` varchar(500) DEFAULT NULL,
   `distance` int(11) DEFAULT NULL,
   `max_speed` int(11) NOT NULL,
-  `maintaince_status` varchar(500) NOT NULL
+  `maintaince_status` varchar(500) NOT NULL,
+  `vehicle_number` varchar(100) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --

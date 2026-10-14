@@ -46,13 +46,11 @@ module.exports.login = async (req, res) => {
 
     const token = GenerateToken(payload);
 
-    let checkjwttoken = await model.CheckJwtToken(checkUser[0].u_id);
-
-    if (checkjwttoken.length == 0) {
-      await model.AddUserJWTToken(token, checkUser[0].u_id);
-    } else {
-      await model.UpdateUserJWTToken(token, checkUser[0].u_id);
-    }
+    // Multi-session: every login gets its own row. Don't overwrite previous
+    // tabs/devices — that's what caused "admin backend closes automatically"
+    // when a second tab logged in.
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h, matches JWT exp
+    await model.AddUserJWTToken(token, checkUser[0].u_id, expiresAt);
 
     // Respond with user data and token
     return res.status(200).json({
@@ -80,13 +78,17 @@ module.exports.login = async (req, res) => {
 
 module.exports.LogOut = async (req, res) => {
   try {
-    let { user_id } = req.user
+    // JWT payload uses u_id, not user_id — destructuring under the wrong name
+    // was silently producing undefined here, which made the DELETE fail.
+    const user_id = req.user?.u_id;
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(400).json({ message: 'Token missing' });
+    if (!user_id) return res.status(400).json({ message: 'Invalid token payload' });
 
-    let updatetoken = await model.UpdateUserJWTToken('null', user_id)
+    // Multi-session: delete only THIS token, not the whole user's session.
+    const deltoken = await model.DeleteUserJWTToken(token, user_id);
 
-    if (updatetoken.affectedRows == 0) {
+    if (deltoken.affectedRows == 0) {
       return res.send({
         result: false,
         message: "Failed to Logout"

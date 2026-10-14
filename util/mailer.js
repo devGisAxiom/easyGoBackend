@@ -2,11 +2,10 @@ let nodemailer = require('nodemailer')
 
 
 module.exports.transporter = nodemailer.createTransport({
-    host: "smtp.hostinger.com",
+    host: "smtp.gmail.com",
     port: 587,
+    secure: false,
     auth: {
-        type: 'custom',
-        method: 'PLAIN',
         user: process.env.EMAIL,
         pass: process.env.PASSWORD,
     },
