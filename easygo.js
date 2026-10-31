@@ -36,8 +36,17 @@ app.use("/easygo", mainRoute);
 
 server.listen(7006, () => {
     logger.info("server running on port 7006");
-    scheduleNightlyPaymentReport();
-    scheduleWeeklyPaymentReport();
+
+    // Scheduled reports must never run from a developer machine — they
+    // would email the production recipients with figures from a test
+    // database. `isLocalOverride` is true whenever a .env.local file is
+    // present (i.e. a local development setup).
+    if (isLocalOverride) {
+        logger.info("Local override detected - scheduled reports are disabled");
+    } else {
+        scheduleNightlyPaymentReport();
+        scheduleWeeklyPaymentReport();
+    }
 
 })
 

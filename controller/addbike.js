@@ -377,9 +377,16 @@ module.exports.getAvailableBikes = async (req, res) => {
             });
         }
 
+        // A franchise-admin is always restricted to their own fleet — they
+        // must not be able to widen the search to another franchise by
+        // passing a different franchise_id.
+        const scopedFranchiseId = isFranchiseAdmin(req.user)
+            ? Number(req.user.franchise_id)
+            : (franchise_id || null);
+
         const list = await findAvailableBikes(
             pickup_date, pickup_time, drop_date, drop_time,
-            exclude_b_id, franchise_id,
+            exclude_b_id, scopedFranchiseId,
         );
 
         return res.send({
