@@ -161,7 +161,6 @@ async function main() {
             if (first) {
                 check('booking carries franchise_name', first.franchise_name !== undefined, 'missing');
                 check('booking carries b_source', first.b_source !== undefined, 'missing');
-                check('booking carries manual_payment_total', first.manual_payment_total !== undefined, 'missing');
             }
         }
         {
@@ -192,6 +191,11 @@ async function main() {
         {
             const r = await api('/report/payments', {}, token);
             check('report/payments', r.body.result === true && Array.isArray(r.body.list), `count=${(r.body.list || []).length}`);
+            const first = (r.body.list || [])[0];
+            if (first) {
+                check('payment report carries manual_payment_total', first.manual_payment_total !== undefined, 'missing');
+                check('payment report carries source + franchise', first.b_source !== undefined && first.franchise_name !== undefined, 'missing');
+            }
         }
         {
             const r = await api('/report/income-by-location', {}, token);
