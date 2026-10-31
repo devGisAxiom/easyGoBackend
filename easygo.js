@@ -1,14 +1,17 @@
-var express = require("express");
+// Load .env.local (developer overrides) then .env (shared defaults).
+require('./config/env');
+const express = require("express");
 var cors = require("cors");
 var app = express();
 var bodyparser = require("body-parser");
 var https = require("https")
 var http = require('http')
 const fs = require('fs');
-require('dotenv').config({ encoding: 'latin1' })
+const { isLocalOverride } = require('./config/env');
 var morgan = require('morgan');
 var logger = require('./util/logger');
 const { scheduleNightlyPaymentReport } = require('./util/nightlyPaymentReport');
+const { scheduleWeeklyPaymentReport } = require('./util/weeklyReport');
 
 // Nginx handles SSL termination; Node always runs plain HTTP
 server = http.createServer(app);
@@ -34,6 +37,7 @@ app.use("/easygo", mainRoute);
 server.listen(7006, () => {
     logger.info("server running on port 7006");
     scheduleNightlyPaymentReport();
+    scheduleWeeklyPaymentReport();
 
 })
 

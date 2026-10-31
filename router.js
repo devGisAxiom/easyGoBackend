@@ -91,7 +91,7 @@
 const express = require("express");
 const route = express.Router();
 const logger = require('./util/logger'); // make sure path is correct
-const { verifyToken, Adminauthorize } = require('./middleware/auth'); // Auth middleware
+const { verifyToken, Adminauthorize, Franchiseauthorize } = require('./middleware/auth'); // Auth middleware
 
 // ========================
 // Auth Routes
@@ -217,7 +217,7 @@ route.post('/delete/contact', verifyToken, (req, res) => {
 // ========================
 // Bike Routes
 // ========================
-const { addbike, listbike, deleteBikes, editbikes, getAvailableBikes } = require('./controller/addbike');
+const { addbike, listbike, deleteBikes, editbikes, getAvailableBikes, checkAvailability } = require('./controller/addbike');
 
 route.post('/add/bike', verifyToken, (req, res) => {
     logger.info("POST /add/bike called");
@@ -239,9 +239,15 @@ route.post('/edit/bike', verifyToken, (req, res) => {
     editbikes(req, res);
 });
 
-route.post('/list/available-bikes', verifyToken, Adminauthorize(['admin']), (req, res) => {
+route.post('/list/available-bikes', verifyToken, Adminauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /list/available-bikes called");
     getAvailableBikes(req, res);
+});
+
+// Customer-facing availability probe — used before confirming a booking.
+route.post('/list/availability', verifyToken, (req, res) => {
+    logger.info("POST /list/availability called");
+    checkAvailability(req, res);
 });
 
 // ========================
@@ -270,7 +276,7 @@ route.post('/add/review', verifyToken, (req, res) => {
     reviewadd(req, res);
 });
 
-route.post('/add/center', verifyToken, (req, res) => {
+route.post('/add/center', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /add/center called");
     addbikecenter(req, res);
 });
@@ -280,12 +286,12 @@ route.post('/list/center', verifyToken, (req, res) => {
     listcenter(req, res);
 });
 
-route.post('/delete/center', verifyToken, (req, res) => {
+route.post('/delete/center', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /delete/center called");
     deletecenter(req, res);
 });
 
-route.post('/edit/center', verifyToken, (req, res) => {
+route.post('/edit/center', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /edit/center called");
     editcenter(req, res);
 });
@@ -347,19 +353,252 @@ route.post('/report/send-now', verifyToken, Adminauthorize(['admin']), (req, res
 const { addDepositReturn } = require('./controller/add_deposit_return');
 const { listDepositReturns, getDepositReturn } = require('./controller/list_deposit_returns');
 
-route.post('/add/deposit-return', verifyToken, Adminauthorize(['admin']), (req, res) => {
+route.post('/add/deposit-return', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /add/deposit-return called");
     addDepositReturn(req, res);
 });
 
-route.post('/list/deposit-returns', verifyToken, Adminauthorize(['admin']), (req, res) => {
+route.post('/list/deposit-returns', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /list/deposit-returns called");
     listDepositReturns(req, res);
 });
 
-route.post('/get/deposit-return', verifyToken, Adminauthorize(['admin']), (req, res) => {
+route.post('/get/deposit-return', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
     logger.info("POST /get/deposit-return called");
     getDepositReturn(req, res);
+});
+
+// ========================
+// Franchise (tenant) Routes
+// ========================
+const {
+    listFranchises, addFranchise, editFranchise, deleteFranchise,
+    listFranchiseAdmins, assignFranchiseAdmin, getFranchiseStats,
+} = require('./controller/franchise');
+
+route.post('/list/franchise', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/franchise called");
+    listFranchises(req, res);
+});
+
+route.post('/add/franchise', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /add/franchise called");
+    addFranchise(req, res);
+});
+
+route.post('/edit/franchise', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /edit/franchise called");
+    editFranchise(req, res);
+});
+
+route.post('/delete/franchise', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /delete/franchise called");
+    deleteFranchise(req, res);
+});
+
+route.post('/list/franchise-admins', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/franchise-admins called");
+    listFranchiseAdmins(req, res);
+});
+
+route.post('/assign/franchise-admin', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /assign/franchise-admin called");
+    assignFranchiseAdmin(req, res);
+});
+
+route.post('/franchise/stats', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /franchise/stats called");
+    getFranchiseStats(req, res);
+});
+
+// ========================
+// Account Deletion (Apple App Store requirement)
+// ========================
+const {
+    requestDeleteOtp, deleteAccount, getDeletionPreview,
+} = require('./controller/accountDeletion');
+
+route.post('/delete/account/preview', verifyToken, (req, res) => {
+    logger.info("POST /delete/account/preview called");
+    getDeletionPreview(req, res);
+});
+
+route.post('/delete/account/request-otp', verifyToken, (req, res) => {
+    logger.info("POST /delete/account/request-otp called");
+    requestDeleteOtp(req, res);
+});
+
+route.post('/delete/account', verifyToken, (req, res) => {
+    logger.info("POST /delete/account called");
+    deleteAccount(req, res);
+});
+
+// ========================
+// Manual Payments (offline collections)
+// ========================
+const {
+    addManualPayment, listManualPayments, deleteManualPayment,
+} = require('./controller/manualPayment');
+
+route.post('/add/manual-payment', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /add/manual-payment called");
+    addManualPayment(req, res);
+});
+
+route.post('/list/manual-payments', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/manual-payments called");
+    listManualPayments(req, res);
+});
+
+route.post('/delete/manual-payment', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /delete/manual-payment called");
+    deleteManualPayment(req, res);
+});
+
+// ========================
+// Penalties / Fines
+// ========================
+const {
+    addPenalty, listForBooking: listPenaltiesForBooking,
+    listPenalties, deletePenalty,
+} = require('./controller/penalty');
+
+route.post('/add/penalty', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /add/penalty called");
+    addPenalty(req, res);
+});
+
+route.post('/list/booking-penalties', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/booking-penalties called");
+    listPenaltiesForBooking(req, res);
+});
+
+route.post('/list/penalties', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/penalties called");
+    listPenalties(req, res);
+});
+
+route.post('/delete/penalty', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /delete/penalty called");
+    deletePenalty(req, res);
+});
+
+// ========================
+// Final Bill
+// ========================
+const { getFinalBill, saveFinalBill } = require('./controller/finalBill');
+
+route.post('/booking/final-bill', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /booking/final-bill called");
+    getFinalBill(req, res);
+});
+
+route.post('/booking/save-final-bill', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /booking/save-final-bill called");
+    saveFinalBill(req, res);
+});
+
+// ========================
+// Vehicle Swaps
+// ========================
+const {
+    requestSwap, listSwapRequests, approveSwap, rejectSwap, listSwaps, getSwapQuote,
+} = require('./controller/swap');
+
+route.post('/request/swap', verifyToken, (req, res) => {
+    logger.info("POST /request/swap called");
+    requestSwap(req, res);
+});
+
+route.post('/list/swap-requests', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/swap-requests called");
+    listSwapRequests(req, res);
+});
+
+route.post('/approve/swap', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /approve/swap called");
+    approveSwap(req, res);
+});
+
+route.post('/reject/swap', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /reject/swap called");
+    rejectSwap(req, res);
+});
+
+route.post('/list/swaps', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/swaps called");
+    listSwaps(req, res);
+});
+
+route.post('/swap/quote', verifyToken, (req, res) => {
+    logger.info("POST /swap/quote called");
+    getSwapQuote(req, res);
+});
+
+// ========================
+// Feedback
+// ========================
+const {
+    addFeedback, listFeedback, listMyFeedback,
+    updateFeedbackStatus, deleteFeedback,
+} = require('./controller/feedback');
+
+route.post('/add/feedback', verifyToken, (req, res) => {
+    logger.info("POST /add/feedback called");
+    addFeedback(req, res);
+});
+
+route.post('/list/feedback', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /list/feedback called");
+    listFeedback(req, res);
+});
+
+route.post('/list/my-feedback', verifyToken, (req, res) => {
+    logger.info("POST /list/my-feedback called");
+    listMyFeedback(req, res);
+});
+
+route.post('/update/feedback-status', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /update/feedback-status called");
+    updateFeedbackStatus(req, res);
+});
+
+route.post('/delete/feedback', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /delete/feedback called");
+    deleteFeedback(req, res);
+});
+
+// ========================
+// Reports (income by location, vehicles on ride, weekly)
+// ========================
+const {
+    incomeByLocation, vehiclesOnRide, vehiclesOnRideExcel,
+    weeklyReportExcel, weeklyReportSendNow,
+} = require('./controller/reports');
+
+route.post('/report/income-by-location', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /report/income-by-location called");
+    incomeByLocation(req, res);
+});
+
+route.post('/report/vehicles-on-ride', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /report/vehicles-on-ride called");
+    vehiclesOnRide(req, res);
+});
+
+route.post('/report/vehicles-on-ride-excel', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /report/vehicles-on-ride-excel called");
+    vehiclesOnRideExcel(req, res);
+});
+
+route.post('/report/weekly-excel', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
+    logger.info("POST /report/weekly-excel called");
+    weeklyReportExcel(req, res);
+});
+
+route.post('/report/weekly-send-now', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /report/weekly-send-now called");
+    weeklyReportSendNow(req, res);
 });
 
 module.exports = route;

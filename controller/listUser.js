@@ -1,5 +1,6 @@
 const model = require('../model/listUser');
 const logger = require('../util/logger');
+const { getScope, isFranchiseAdmin } = require('../util/franchiseScope');
 
 /*
  * List Users
@@ -24,6 +25,11 @@ module.exports.listUser = async (req, res) => {
         } else {
             // Non-admin can only view own data
             condition.u_id = u_id;
+        }
+
+        // Franchise-admin sees only customers who booked with their franchise.
+        if (isFranchiseAdmin(req.user)) {
+            condition.franchise_id = Number(req.user.franchise_id);
         }
 
         const listUser = await model.listUserQuery(condition);

@@ -30,7 +30,7 @@ module.exports.hasDepositReturn = async (booking_id) => {
 };
 
 // List deposit returns, with optional date filter
-module.exports.listDepositReturns = async (from_date, to_date) => {
+module.exports.listDepositReturns = async (from_date, to_date, franchise_id = null) => {
     var conditions = [];
     var params = [];
     if (from_date) {
@@ -41,6 +41,10 @@ module.exports.listDepositReturns = async (from_date, to_date) => {
         conditions.push('DATE(dr.dr_returned_at) <= ?');
         params.push(to_date);
     }
+    if (franchise_id) {
+        conditions.push('b.b_franchise_id = ?');
+        params.push(franchise_id);
+    }
     var where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     var Query = `
         SELECT
@@ -49,10 +53,13 @@ module.exports.listDepositReturns = async (from_date, to_date) => {
             b.b_id AS booking_id,
             b.b_rent_amount,
             b.b_total_amount,
+            b.b_franchise_id,
+            fr.fr_name AS franchise_name,
             dr.dr_gpay_ref_number,
             dr.dr_amount AS deposit_returned_amount,
             dr.dr_returned_at,
             dr.dr_notes,
+            dr.dr_gpay_screenshot_url,
             u_customer.u_id AS customer_id,
             u_customer.u_name AS customer_name,
             u_customer.u_mobile AS customer_mobile,
@@ -64,6 +71,7 @@ module.exports.listDepositReturns = async (from_date, to_date) => {
         LEFT JOIN user u_customer ON u_customer.u_id = b.b_u_id
         LEFT JOIN bikes bk ON bk.b_id = b.b_bk_id
         LEFT JOIN user u_admin ON u_admin.u_id = dr.dr_returned_by
+        LEFT JOIN franchises fr ON fr.fr_id = b.b_franchise_id
         ${where}
         ORDER BY dr.dr_returned_at DESC
     `;

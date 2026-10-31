@@ -1,4 +1,5 @@
 const model = require('../model/login');
+const franchiseModel = require('../model/franchise');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const logger = require('../util/logger');
@@ -40,8 +41,9 @@ module.exports.login = async (req, res) => {
     const payload = {
       u_id: checkUser[0].u_id,
       email: checkUser[0].u_email,
-      role: checkUser[0].u_role
-
+      role: checkUser[0].u_role,
+      // Franchise (tenant) context. NULL for head-office / super-admin.
+      franchise_id: checkUser[0].u_franchise_id || null,
     };
 
     const token = GenerateToken(payload);
@@ -51,6 +53,17 @@ module.exports.login = async (req, res) => {
     // when a second tab logged in.
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2h, matches JWT exp
     await model.AddUserJWTToken(token, checkUser[0].u_id, expiresAt);
+
+    // Franchise display name, so the admin UI can show "Nedumbassery" etc.
+    let franchiseName = null;
+    if (payload.franchise_id) {
+      try {
+        const fr = await franchiseModel.getFranchiseById(payload.franchise_id);
+        franchiseName = fr?.fr_name || null;
+      } catch (err) {
+        logger.warn('Login: could not resolve franchise name: %s', err.message);
+      }
+    }
 
     // Respond with user data and token
     return res.status(200).json({
@@ -62,6 +75,8 @@ module.exports.login = async (req, res) => {
         email: checkUser[0].u_email,
         phone: checkUser[0].u_phone,
         role: checkUser[0].u_role,
+        franchise_id: payload.franchise_id,
+        franchise_name: franchiseName,
         token
       }
     });

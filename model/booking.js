@@ -29,8 +29,14 @@ module.exports.Addbooking = async (
   booking_date,
   b_bk_id = null,
   b_bike_name = null,
+  b_franchise_id = null,
+  b_source = 'app',
+  b_selfie = '',
 ) => {
-  var Query = `insert into bookings(b_u_id,b_rent_amount,b_fine_amount,b_total_amount,b_price_id, b_pickup_location, b_pickup_date, b_picup_time, b_drop_location, b_drop_date, b_drop_time,booking_date, b_bk_id, b_bike_name)values(?,?,?,?,?,?,?,?,?,?,?,?,?,?);`;
+  // `b_selfie` is written explicitly rather than relying on the column
+  // default, so the insert behaves the same whether or not the column is
+  // nullable in a given environment.
+  var Query = `insert into bookings(b_u_id,b_rent_amount,b_fine_amount,b_total_amount,b_price_id, b_pickup_location, b_pickup_date, b_picup_time, b_drop_location, b_drop_date, b_drop_time,booking_date, b_bk_id, b_bike_name, b_franchise_id, b_source, b_selfie)values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`;
   var data = query(Query, [
     u_id,
     rent_amount,
@@ -46,6 +52,9 @@ module.exports.Addbooking = async (
     booking_date,
     b_bk_id,
     b_bike_name,
+    b_franchise_id,
+    b_source,
+    b_selfie,
   ]);
   return data;
 };
@@ -58,11 +67,15 @@ module.exports.AddPaymentHistory = async (
   total_amount,
   price_id,
   booking_date,
+  ph_bike_id = 0,
 ) => {
-  var Query = `insert into paymentHistory(ph_user_id,ph_booking_id,ph_rent_amount,ph_fine_amount,ph_total_amount,ph_price_id,ph_booking_date)values(?,?,?,?,?,?,?);`;
+  // ph_bike_id is written explicitly (0 = not yet assigned) instead of
+  // relying on the column default.
+  var Query = `insert into paymentHistory(ph_user_id,ph_booking_id,ph_bike_id,ph_rent_amount,ph_fine_amount,ph_total_amount,ph_price_id,ph_booking_date)values(?,?,?,?,?,?,?,?);`;
   var data = query(Query, [
     user_id,
     booking_id,
+    ph_bike_id,
     rent_amount,
     fine_amount,
     total_amount,
@@ -77,10 +90,12 @@ module.exports.listbookingQuery = async (condition, params) => {
        dr.dr_id AS deposit_return_id,
        dr.dr_gpay_ref_number AS deposit_gpay_ref,
        dr.dr_amount AS deposit_returned_amount,
-       dr.dr_returned_at AS deposit_returned_at
+       dr.dr_returned_at AS deposit_returned_at,
+       fr.fr_name AS franchise_name
    FROM bookings b
    LEFT JOIN user u ON b.b_u_id = u.u_id
-   LEFT JOIN deposit_returns dr ON dr.dr_booking_id = b.b_id ${condition}
+   LEFT JOIN deposit_returns dr ON dr.dr_booking_id = b.b_id
+   LEFT JOIN franchises fr ON fr.fr_id = b.b_franchise_id ${condition}
    ORDER BY b.booking_date DESC `;
   // mysql library: when params is undefined/null, query() with one arg works.
   // When params is an array, we pass them through for ?-substitution.
@@ -164,3 +179,19 @@ module.exports.getBookingFullDetails = async (b_id) => {
   var data = query(Query, [b_id]);
   return Array.isArray(data) ? data[0] : data;
 };
+
+/**
+ * Snapshot the final-bill calculation onto the booking so later edits to
+ * penalties or manual payments never rewrite historical figures.
+ */
+module.exports.saveFinalBill = async (b_id, snapshot) => {
+  var Query = `UPDATE bookings SET b_final_bill = ? WHERE b_id = ?`;
+  return await query(Query, [JSON.stringify(snapshot), b_id]);
+};
+
+module.exports.getFinalBill = async (b_id) => {
+  var Query = `SELECT b_final_bill FROM bookings WHERE b_id = ?`;
+  var data = await query(Query, [b_id]);
+  return data[0]?.b_final_bill ?? null;
+};
+

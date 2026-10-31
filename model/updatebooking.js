@@ -2,9 +2,9 @@ var db = require('../config/db');
 var util = require('util');
 const query = util.promisify(db.query).bind(db);
 
-module.exports.updateBookingStatus = async (updateString, b_id) => {
-  var Query = `UPDATE bookings SET ${updateString} WHERE b_id = ?`;
-  var data = await query(Query, [b_id]);
+module.exports.updateBookingStatus = async (setClause, params, b_id) => {
+  var Query = `UPDATE bookings SET ${setClause} WHERE b_id = ?`;
+  var data = await query(Query, [...(params || []), b_id]);
   return data;
 };
 

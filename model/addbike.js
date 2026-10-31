@@ -14,24 +14,6 @@ module.exports.SelectImage = async () => {
 };
 
 module.exports.AddBikeQuery = async (
-  name,
-  vehicle_number,
-  description,
-  rate,
-  location,
-  latitude,
-  longitude,
-  extras,
-  milage,
-  geartype,
-  fueltype,
-  bhp,
-  distance,
-  max_speed,
-  maintaince_status,
-) => {
-  var Query = `insert into bikes(b_name,vehicle_number,b_description,b_price,b_location,b_latitude,b_longitude,b_extras,b_milage,b_geartype,b_fueltype,b_bhp,distance,max_speed,maintaince_status) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)`;
-  var data = await query(Query, [
     name,
     vehicle_number,
     description,
@@ -47,9 +29,30 @@ module.exports.AddBikeQuery = async (
     distance,
     max_speed,
     maintaince_status,
-  ]);
-  return data;
+    franchise_id = null,
+) => {
+    var Query = `insert into bikes(b_name,vehicle_number,b_description,b_price,b_location,b_latitude,b_longitude,b_extras,b_milage,b_geartype,b_fueltype,b_bhp,distance,max_speed,maintaince_status,b_franchise_id) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    var data = await query(Query, [
+        name,
+        vehicle_number,
+        description,
+        rate,
+        location,
+        latitude,
+        longitude,
+        extras,
+        milage,
+        geartype,
+        fueltype,
+        bhp,
+        distance,
+        max_speed,
+        maintaince_status,
+        franchise_id,
+    ]);
+    return data;
 };
+
 
 module.exports.AddBikeimageQuery = async (bike_id, imagePath) => {
   var Query = `INSERT INTO bike_images(bike_id, image_path) VALUES (?, ?)`;
@@ -57,11 +60,15 @@ module.exports.AddBikeimageQuery = async (bike_id, imagePath) => {
   return data;
 };
 
-module.exports.listbikeQuery = async (condition) => {
-  var Query = `SELECT * FROM  bikes ${condition} ORDER BY b_id DESC`;
-  var data = query(Query);
-  return data;
+module.exports.listbikeQuery = async (where, order, params) => {
+    var Query = `SELECT bk.*, fr.fr_name AS franchise_name
+                 FROM bikes bk
+                 LEFT JOIN franchises fr ON fr.fr_id = bk.b_franchise_id
+                 ${where} ORDER BY ${order || 'bk.b_id DESC'}`;
+    var data = params && params.length ? await query(Query, params) : await query(Query);
+    return data;
 };
+
 
 module.exports.getbikeReview = async (bike_id) => {
   var Query = `SELECT r.*,u.u_name,u.u_profile_pic FROM  bike_reviews r LEFT JOIN user u on r.br_used_id = u.u_id where r.br_bike_id =?`;
@@ -79,11 +86,12 @@ module.exports.checkbikesQuery = async (b_id) => {
   var data = await query(Query, [b_id]);
   return data;
 };
-module.exports.UpdateBikesDetails = async (updateQuery, b_id) => {
-  var Query = ` update bikes ${updateQuery} where b_id = ?`;
-  var data = await query(Query, [b_id]);
-  return data;
+module.exports.UpdateBikesDetails = async (setClause, params, b_id) => {
+    var Query = `UPDATE bikes ${setClause} WHERE b_id = ?`;
+    var data = await query(Query, [...(params || []), b_id]);
+    return data;
 };
+
 module.exports.DeleteBikeImages = async (b_id) => {
   var Query = `DELETE FROM bike_images WHERE bike_id = ?`;
   var data = await query(Query, [b_id]);

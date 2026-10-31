@@ -4,6 +4,8 @@ var fs = require("fs");
 const path = require("path");
 let moment = require('moment')
 const logger = require('../util/logger');
+const { getScope, assertFranchiseAccess, isFranchiseAdmin } = require('../util/franchiseScope');
+const { toDateTimeString, toDatePart, toTimePart } = require('../util/datetime');
 
 function ensureUploadDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -26,7 +28,7 @@ module.exports.addbike = async (req, res) => {
                     });
                 }
 
-                let { name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude } = fields;
+                let { name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, centerList, latitude, longitude, franchise_id } = fields;
 
                 if (!name || !description || !rate || !location || !extras || !milage || !geartype || !fueltype || !bhp || !max_speed || !maintaince_status) {
                     return res.send({
@@ -41,8 +43,15 @@ module.exports.addbike = async (req, res) => {
                 let date = moment().format('MM-DD_HH-mm-ss');
                 const safeLatitude = latitude && latitude !== 'null' ? latitude : '0';
                 const safeLongitude = longitude && longitude !== 'null' ? longitude : '0';
+                // A franchise-admin's vehicles are always tagged with their own
+                // franchise; a super-admin can pick the franchise explicitly.
+                let bikeFranchiseId = franchise_id || null;
+                if (isFranchiseAdmin(req.user)) {
+                    bikeFranchiseId = Number(req.user.franchise_id);
+                }
+
                 // 1️⃣ Insert bike details first
-                const bikeResult = await model.AddBikeQuery(name, vehicle_number || null, description, rate, location, safeLatitude, safeLongitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status);
+                const bikeResult = await model.AddBikeQuery(name, vehicle_number || null, description, rate, location, safeLatitude, safeLongitude, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, bikeFranchiseId);
                 const bike_id = bikeResult.insertId; // get new bike id
                 centerList = centerList ? JSON.parse(centerList) : [];
                 for (const centerId of centerList) {
@@ -105,17 +114,29 @@ module.exports.addbike = async (req, res) => {
 module.exports.listbike = async (req, res) => {
     try {
         let { b_id, search, most_rated } = req.body || {}
-        var condition = ''
+        const where = [];
+        const params = [];
+
         if (b_id) {
-            condition = `where b_id='${b_id}'`
+            where.push('bk.b_id = ?');
+            params.push(Number(b_id));
         }
         if (search) {
-            condition = `where (b_name LIKE '%${search}%')`;
+            where.push('(bk.b_name LIKE ? OR bk.b_location LIKE ?)');
+            params.push(`%${search}%`, `%${search}%`);
         }
-        if (most_rated) {
-            condition = `ORDER BY b_ratings DESC`;
+
+        // Franchise-admin only sees their own franchise's vehicles.
+        const scope = getScope(req.user, 'bk.b_franchise_id');
+        if (scope.clause) {
+            where.push(scope.clause);
+            params.push(...scope.params);
         }
-        let listbike = await model.listbikeQuery(condition);
+
+        const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        const order = most_rated ? 'bk.b_ratings DESC' : 'bk.b_id DESC';
+
+        let listbike = await model.listbikeQuery(whereClause, order, params);
 
         if (listbike.length > 0) {
 
@@ -164,13 +185,23 @@ module.exports.deleteBikes = async (req, res) => {
                     message: "bikes details not found"
                 });
             } else {
+                // Franchise guard — a franchise-admin must not delete another
+                // franchise's vehicle.
+                const access = assertFranchiseAccess(req.user, checkbikes[0].b_franchise_id);
+                if (!access.allowed) {
+                    return res.send({
+                        result: false,
+                        code: 'FRANCHISE_FORBIDDEN',
+                        message: access.message,
+                    });
+                }
+
                 var deletesection = await model.RemoveBikesQuery(b_id);
                 if (deletesection.affectedRows > 0) {
                     return res.send({
                         result: true,
                         message: "bikes list deleted successfully"
                     });
-
                 }
             }
         }
@@ -184,6 +215,7 @@ module.exports.deleteBikes = async (req, res) => {
     }
 }
 
+
 module.exports.editbikes = async (req, res) => {
     try {
         const form = new formidable.IncomingForm({ multiples: false });
@@ -196,7 +228,7 @@ module.exports.editbikes = async (req, res) => {
                     data: err,
                 });
             }
-            const { b_id, name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, latitude, longitude, bikecenter, status } = fields;
+            const { b_id, name, vehicle_number, description, rate, location, extras, milage, geartype, fueltype, bhp, distance, max_speed, maintaince_status, latitude, longitude, bikecenter, status, franchise_id } = fields;
 
             const addBikeUploadDir = path.join(process.cwd(), 'uploads', 'addbike');
             ensureUploadDir(addBikeUploadDir);
@@ -217,28 +249,53 @@ module.exports.editbikes = async (req, res) => {
                 });
             }
 
-            let updates = [];
+            // Franchise guard — a franchise-admin must not edit another
+            // franchise's vehicle.
+            const access = assertFranchiseAccess(req.user, bikesExists[0].b_franchise_id);
+            if (!access.allowed) {
+                return res.send({
+                    result: false,
+                    code: 'FRANCHISE_FORBIDDEN',
+                    message: access.message,
+                });
+            }
 
-            if (name) updates.push(`b_name='${name}'`);
-            if (vehicle_number) updates.push(`vehicle_number='${vehicle_number}'`);
-            if (description) updates.push(`b_description='${description}'`);
-            if (rate) updates.push(`b_price='${rate}'`);
-            if (location) updates.push(`b_location='${location}'`);
-            if (extras) updates.push(`b_extras='${extras}'`);
-            if (milage) updates.push(`b_milage='${milage}'`);
-            if (geartype) updates.push(`b_geartype='${geartype}'`);
-            if (fueltype) updates.push(`b_fueltype='${fueltype}'`);
-            if (bhp) updates.push(`b_bhp='${bhp}'`);
-            if (distance) updates.push(`distance='${distance}'`);
-            if (max_speed) updates.push(`max_speed='${max_speed}'`);
-            if (maintaince_status) updates.push(`maintaince_status='${maintaince_status}'`);
-            if (latitude) updates.push(`b_latitude='${latitude}'`);
-            if (longitude) updates.push(`b_longitude='${longitude}'`);
-            if (status) updates.push(`b_status='${status}'`);
+            // Whitelisted field → column map. Building the SET clause from a
+            // fixed map (instead of interpolating values into SQL) keeps every
+            // value parameterised and prevents SQL injection through the
+            // edit-bike form.
+            const FIELD_MAP = {
+                name: 'b_name',
+                vehicle_number: 'vehicle_number',
+                description: 'b_description',
+                rate: 'b_price',
+                location: 'b_location',
+                extras: 'b_extras',
+                milage: 'b_milage',
+                geartype: 'b_geartype',
+                fueltype: 'b_fueltype',
+                bhp: 'b_bhp',
+                distance: 'distance',
+                max_speed: 'max_speed',
+                maintaince_status: 'maintaince_status',
+                latitude: 'b_latitude',
+                longitude: 'b_longitude',
+                status: 'b_status',
+                franchise_id: 'b_franchise_id',
+            };
+
+            const updates = [];
+            const updateParams = [];
+            for (const [field, column] of Object.entries(FIELD_MAP)) {
+                const value = fields[field];
+                if (value === undefined || value === null || value === '') continue;
+                updates.push(`${column} = ?`);
+                updateParams.push(value);
+            }
 
             if (updates.length > 0) {
                 const updateQuery = `SET ${updates.join(', ')}`;
-                var updateResult = await model.UpdateBikesDetails(updateQuery, b_id);
+                var updateResult = await model.UpdateBikesDetails(updateQuery, updateParams, b_id);
             }
 
             // 2️⃣ Delete old images if requested
@@ -299,9 +356,19 @@ module.exports.editbikes = async (req, res) => {
     }
 }
 
+/**
+ * List bikes that are free for a given time window.
+ *
+ * The optional `franchise_id` narrows the candidates to a franchise's own
+ * fleet — a booking at a Nedumbassery pickup location must not be blocked
+ * (or satisfied) by an Ernakulam vehicle.
+ */
 module.exports.getAvailableBikes = async (req, res) => {
     try {
-        const { pickup_date, pickup_time, drop_date, drop_time, exclude_b_id } = req.body || {};
+        const {
+            pickup_date, pickup_time, drop_date, drop_time,
+            exclude_b_id, franchise_id,
+        } = req.body || {};
 
         if (!pickup_date || !pickup_time || !drop_date || !drop_time) {
             return res.send({
@@ -310,34 +377,10 @@ module.exports.getAvailableBikes = async (req, res) => {
             });
         }
 
-        const pickupDt = `${pickup_date} ${String(pickup_time).substring(0, 8)}`;
-        const dropDt = `${drop_date} ${String(drop_time).substring(0, 8)}`;
-
-        const params = [dropDt, pickupDt];
-        let excludeClause = '';
-        if (exclude_b_id) {
-            excludeClause = 'AND b_id != ?';
-            params.push(Number(exclude_b_id));
-        }
-
-        const Query = `
-            SELECT b_id, b_name, vehicle_number, b_location, b_fueltype, b_geartype, maintaince_status
-            FROM bikes
-            WHERE b_status = 'Active'
-              AND (maintaince_status IS NULL
-                   OR maintaince_status NOT IN ('maintenance', 'damaged', 'Damaged', 'MAINTENANCE'))
-              AND b_id NOT IN (
-                  SELECT bk.b_bk_id FROM bookings bk
-                  WHERE bk.b_bk_id IS NOT NULL
-                    AND bk.b_status IN ('approved', 'onride', 'extendedreq')
-                    AND TIMESTAMP(bk.b_pickup_date, SUBSTRING_INDEX(bk.b_picup_time, '.', 1)) < ?
-                    AND TIMESTAMP(bk.b_drop_date,   SUBSTRING_INDEX(bk.b_drop_time,   '.', 1)) > ?
-              )
-              ${exclude_b_id ? `AND b_id != ${Number(exclude_b_id)}` : ''}
-            ORDER BY b_name ASC
-        `;
-
-        const list = await model.getAvailableBikesQuery(Query, [dropDt, pickupDt]);
+        const list = await findAvailableBikes(
+            pickup_date, pickup_time, drop_date, drop_time,
+            exclude_b_id, franchise_id,
+        );
 
         return res.send({
             result: true,
@@ -353,6 +396,165 @@ module.exports.getAvailableBikes = async (req, res) => {
         });
     }
 };
+
+/**
+ * Shared availability query used by both the admin "assign vehicle" dialog
+ * and the customer booking flow.
+ *
+ * @returns {Promise<Array>} Available bikes.
+ */
+async function findAvailableBikes(
+    pickup_date, pickup_time, drop_date, drop_time,
+    exclude_b_id = null, franchise_id = null,
+) {
+    // Normalise both ends — the customer app sends a full timestamp
+    // ("2026-12-01 10:00:00.000") while the admin panel sends a bare time
+    // ("10:00:00"). TIMESTAMP() needs both parts separately.
+    const pickupDt = toDateTimeString(pickup_date, pickup_time);
+    const dropDt = toDateTimeString(drop_date, drop_time);
+
+    const params = [dropDt, pickupDt];
+    let extra = '';
+
+    if (exclude_b_id) {
+        extra += ' AND bk.b_id != ?';
+        params.push(Number(exclude_b_id));
+    }
+    if (franchise_id) {
+        extra += ' AND bk.b_franchise_id = ?';
+        params.push(Number(franchise_id));
+    }
+
+    const Query = `
+        SELECT bk.b_id, bk.b_name, bk.vehicle_number, bk.b_location,
+               bk.b_fueltype, bk.b_geartype, bk.maintaince_status
+        FROM bikes bk
+        WHERE bk.b_status = 'Active'
+          AND (bk.maintaince_status IS NULL
+               OR bk.maintaince_status NOT IN ('maintenance', 'damaged', 'Damaged', 'MAINTENANCE'))
+          AND bk.b_id NOT IN (
+              SELECT b.b_bk_id FROM bookings b
+              WHERE b.b_bk_id IS NOT NULL
+                AND b.b_status IN ('approved', 'onride', 'extendedreq')
+                AND TIMESTAMP(b.b_pickup_date, SUBSTRING_INDEX(b.b_picup_time, '.', 1)) < ?
+                AND TIMESTAMP(b.b_drop_date,   SUBSTRING_INDEX(b.b_drop_time,   '.', 1)) > ?
+          )${extra}
+        ORDER BY bk.b_name ASC
+    `;
+
+    return await model.getAvailableBikesQuery(Query, params);
+}
+
+/**
+ * How many vehicles are free in a window (optionally within one franchise).
+ *
+ * @returns {Promise<number>} Count of available vehicles.
+ */
+async function countAvailableBikes(
+    pickup_date, pickup_time, drop_date, drop_time, franchise_id = null,
+) {
+    const list = await findAvailableBikes(
+        pickup_date, pickup_time, drop_date, drop_time, null, franchise_id,
+    );
+    return list.length;
+}
+
+/**
+ * Customer-facing availability probe.
+ *
+ * The customer app calls this before letting the user confirm a booking so
+ * it can show "no vehicles available for this slot" instead of creating a
+ * booking that has to be refunded later.
+ *
+ * If `price_id` is supplied the drop time is derived from the tier duration
+ * when the caller did not pass one explicitly.
+ */
+module.exports.checkAvailability = async (req, res) => {
+    try {
+        const {
+            pickup_location, pickup_date, pickup_time,
+            drop_date, drop_time, price_id,
+        } = req.body || {};
+
+        if (!pickup_date || !pickup_time) {
+            return res.send({
+                result: false,
+                message: 'pickup_date and pickup_time are required',
+            });
+        }
+
+        let resolvedDropDate = toDatePart(drop_date);
+        let resolvedDropTime = toTimePart(drop_time);
+
+        // Derive the drop window from the pricing tier when not supplied.
+        if ((!resolvedDropDate || !resolvedDropTime) && price_id) {
+            const priceModel = require('../model/priceDetails');
+            const priceRows = await priceModel.checkPriceDetails(price_id);
+            if (priceRows.length) {
+                const hours = Number(priceRows[0].rent_duration);
+                if (hours > 0) {
+                    const pickup = moment(
+                        `${toDatePart(pickup_date)} ${toTimePart(pickup_time)}`,
+                        'YYYY-MM-DD HH:mm:ss',
+                    );
+                    if (pickup.isValid()) {
+                        const drop = pickup.clone().add(hours, 'hours');
+                        resolvedDropDate = resolvedDropDate || drop.format('YYYY-MM-DD');
+                        resolvedDropTime = resolvedDropTime || drop.format('HH:mm:ss');
+                    }
+                }
+            }
+        }
+
+        if (!resolvedDropDate || !resolvedDropTime) {
+            return res.send({
+                result: false,
+                message: 'drop_date and drop_time are required (or provide price_id)',
+            });
+        }
+
+        // Scope the fleet to the franchise that owns the pickup location.
+        let franchiseId = null;
+        if (pickup_location) {
+            try {
+                const franchiseModel = require('../model/franchise');
+                franchiseId = await franchiseModel.resolveFranchiseByLocation(
+                    pickup_location, null,
+                );
+            } catch (frErr) {
+                logger.warn('checkAvailability: franchise lookup failed: %s', frErr.message);
+            }
+        }
+
+        const list = await findAvailableBikes(
+            pickup_date, pickup_time, resolvedDropDate, resolvedDropTime,
+            null, franchiseId,
+        );
+
+        return res.send({
+            result: true,
+            available: list.length > 0,
+            available_count: list.length,
+            franchise_id: franchiseId,
+            drop_date: resolvedDropDate,
+            drop_time: resolvedDropTime,
+            list: list.map((b) => ({
+                b_id: b.b_id,
+                b_name: b.b_name,
+                vehicle_number: b.vehicle_number,
+            })),
+        });
+    } catch (error) {
+        logger.error('Error in checkAvailability: %s', error.message);
+        return res.send({
+            result: false,
+            message: error.message,
+        });
+    }
+};
+
+module.exports.findAvailableBikes = findAvailableBikes;
+module.exports.countAvailableBikes = countAvailableBikes;
 
 module.exports.checkBikeAvailability = async (bk_id, pickup_date, pickup_time, drop_date, drop_time) => {
     try {

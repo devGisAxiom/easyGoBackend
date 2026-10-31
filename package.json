@@ -26,7 +26,8 @@
   "main": "easygo.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon easygo.js"
+    "start": "nodemon easygo.js",
+    "migrate": "node scripts/migrate.js"
   },
   "keywords": [],
   "author": "",

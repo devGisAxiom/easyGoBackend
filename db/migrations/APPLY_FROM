@@ -1,0 +1,27 @@
+# Apply-from marker for the migration runner
+#
+# The runner ONLY executes migration files whose filename sorts at or after
+# this value. Anything older is skipped entirely and is never recorded in
+# `schema_migrations`.
+#
+# Why this exists
+# ---------------
+# The migration files dated 2026_08_* predate the runner and were applied by
+# hand, so there is no record of them in `schema_migrations`. Re-running them
+# is not safe:
+#
+#   * 2026_08_12 and 2026_08_26 use a plain `ALTER TABLE ... ADD COLUMN`,
+#     which fails with ER_DUP_FIELDNAME.
+#   * 2026_08_22 adds a UNIQUE key on user_token that 2026_08_24 deliberately
+#     drops again — re-running it would silently re-introduce the
+#     single-session restriction that the multi-session migration removed.
+#
+# Rather than tracking that with a "baseline" list (which can be forgotten if
+# the file is not deployed alongside), the runner simply refuses to look at
+# anything before this marker. One rule, no exceptions, no chance of a
+# conflict with the legacy migrations.
+#
+# Format: a single date prefix, matching the start of a migration filename.
+# Everything from that prefix onwards is managed by the runner.
+
+2026_10_22

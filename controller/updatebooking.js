@@ -5,6 +5,7 @@ const { addNotification } = require('../util/notification');
 const sms = require('../util/sms');
 const logger = require('../util/logger');
 const moment = require('moment');
+const { assertFranchiseAccess } = require('../util/franchiseScope');
 
 module.exports.updateBookingStatus = async (req, res) => {
     try {
@@ -47,9 +48,32 @@ module.exports.updateBookingStatus = async (req, res) => {
             return res.send({ result: false, message: "Booking not found" });
         }
 
+        // Franchise guard — a franchise-admin must not be able to act on
+        // another franchise's booking by passing its id directly.
+        const access = assertFranchiseAccess(req.user, booking[0].b_franchise_id);
+        if (!access.allowed) {
+            logger.warn(
+                "updateBookingStatus denied: booking %s belongs to another franchise",
+                b_id,
+            );
+            return res.send({
+                result: false,
+                code: 'FRANCHISE_FORBIDDEN',
+                message: access.message,
+            });
+        }
+
         let getadmin = await model.GetAdmin();
-        let updates = [];
+        const updates = [];
+        const updateParams = [];
         let assignedBike = null;
+
+        // Every value goes through a `?` placeholder — never interpolated
+        // into the SQL string.
+        const pushUpdate = (column, value) => {
+            updates.push(`${column} = ?`);
+            updateParams.push(value);
+        };
 
         if (b_status === 'approved' && b_bk_id) {
             const pickup_date = booking[0].b_pickup_date;
@@ -80,22 +104,22 @@ module.exports.updateBookingStatus = async (req, res) => {
             }
             assignedBike = bike;
 
-            updates.push(`b_status='approved'`);
-            updates.push(`b_bk_id='${b_bk_id}'`);
-            updates.push(`b_bike_name='${String(bike.b_name).replace(/'/g, "''")}'`);
+            pushUpdate('b_status', 'approved');
+            pushUpdate('b_bk_id', Number(b_bk_id));
+            pushUpdate('b_bike_name', String(bike.b_name));
         } else {
-            if (b_status !== undefined) updates.push(`b_status='${b_status}'`);
+            if (b_status !== undefined) pushUpdate('b_status', b_status);
         }
 
-        if (view_reason !== undefined) updates.push(`view_reason='${view_reason}'`);
+        if (view_reason !== undefined) pushUpdate('view_reason', view_reason);
         if (rejection_reason !== undefined && b_status === 'rejected') {
-            updates.push(`rejection_reason='${String(rejection_reason).replace(/'/g, "''")}'`);
+            pushUpdate('rejection_reason', String(rejection_reason).trim());
         }
 
         let result;
         if (updates.length > 0) {
             const updateString = updates.join(', ');
-            result = await model.updateBookingStatus(updateString, b_id);
+            result = await model.updateBookingStatus(updateString, updateParams, b_id);
             if (result.affectedRows == 0) {
                 return res.send({
                     result: false,

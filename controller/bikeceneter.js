@@ -1,20 +1,27 @@
 var model = require('../model/bikecenter')
 const logger = require('../util/logger');
+const { getScope, assertFranchiseAccess, isFranchiseAdmin } = require('../util/franchiseScope');
 
 module.exports.addbikecenter = async (req, res) => {
     try {
 
-        let { location, district, latitude, longitude } = req.body;
+        let { location, district, latitude, longitude, franchise_id } = req.body;
 
         if (!location || !district) {
             logger.warn("addbikecenter failed: insufficient parameters");
             return res.send({
                 result: false,
-                message: "insufficent parameter"
+                message: "insuffcent parameter"
             });
         }
 
-        let addbike = await model.AddBikeCenterQuery(location, district, latitude, longitude);
+        // A franchise-admin's pickup locations belong to their own franchise.
+        let centerFranchiseId = franchise_id || null;
+        if (isFranchiseAdmin(req.user)) {
+            centerFranchiseId = Number(req.user.franchise_id);
+        }
+
+        let addbike = await model.AddBikeCenterQuery(location, district, latitude, longitude, centerFranchiseId);
         if (addbike.affectedRows > 0) {
             return res.send({
                 result: true,
@@ -33,7 +40,7 @@ module.exports.addbikecenter = async (req, res) => {
         logger.error("Error in addbikecenter: ", error);
         return res.send({
             result: false,
-            message: "Internal server error",
+            message: "Internal server error.",
             data: error.message
         })
     }
@@ -43,12 +50,25 @@ module.exports.listcenter = async (req, res) => {
     try {
         let { l_id } = req.body || {}
 
-        var condition = ""
+        var condition = "";
+        const params = [];
+
         if (l_id) {
-            condition = `where l_id='${l_id}'`
+            condition = `WHERE lc.l_id = ?`;
+            params.push(Number(l_id));
         }
 
-        let listcenter = await model.listcenterQuery(condition);
+        // Franchise-admin only sees their own franchise's pickup locations.
+        const scope = getScope(req.user, 'lc.l_franchise_id');
+        if (scope.clause) {
+            condition = condition
+                ? `${condition} AND ${scope.clause}`
+                : `WHERE ${scope.clause}`;
+            params.push(...scope.params);
+        }
+
+        let listcenter = await model.listcenterQuery(condition, params);
+
         if (listcenter.length > 0) {
             return res.send({
                 result: true,
@@ -69,7 +89,6 @@ module.exports.listcenter = async (req, res) => {
             result: false,
             message: error.message,
         });
-
     }
 }
 module.exports.deletecenter = async (req, res) => {
@@ -84,6 +103,17 @@ module.exports.deletecenter = async (req, res) => {
                     message: "Center details not found"
                 })
             } else {
+                // Franchise guard — a franchise-admin must not delete another
+                // franchise's pickup location.
+                const access = assertFranchiseAccess(req.user, checkcenter[0].l_franchise_id);
+                if (!access.allowed) {
+                    return res.send({
+                        result: false,
+                        code: 'FRANCHISE_FORBIDDEN',
+                        message: access.message,
+                    });
+                }
+
                 var deletesection = await model.removecenterQuery(l_id);
                 if (deletesection.affectedRows > 0)
                     return res.send({
@@ -101,14 +131,12 @@ module.exports.deletecenter = async (req, res) => {
             message: error.message,
 
         })
-
     }
 
 }
-
 module.exports.editcenter = async (req, res) => {
     try {
-        let { l_id, location, district } = req.body;
+        let { l_id, location, district, franchise_id } = req.body;
 
         // Check required parameters
         if (!l_id || !location || !district) {
@@ -127,8 +155,19 @@ module.exports.editcenter = async (req, res) => {
             });
         }
 
+        // Franchise guard — a franchise-admin must not edit another
+        // franchise's pickup location.
+        const access = assertFranchiseAccess(req.user, checkcenter[0].l_franchise_id);
+        if (!access.allowed) {
+            return res.send({
+                result: false,
+                code: 'FRANCHISE_FORBIDDEN',
+                message: access.message,
+            });
+        }
+
         // Update center
-        let updatecenter = await model.updatecenterQuery(l_id, location, district);
+        let updatecenter = await model.updatecenterQuery(l_id, location, district, franchise_id);
         if (updatecenter.affectedRows > 0) {
             return res.send({
                 result: true,

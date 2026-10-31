@@ -1,4 +1,6 @@
 var model = require("../model/booking");
+const franchiseModel = require("../model/franchise");
+const addbikeController = require("./addbike");
 const logger = require("../util/logger");
 var moment = require("moment");
 const notify = require("../util/notification");
@@ -6,7 +8,12 @@ var formidable = require("formidable");
 var fs = require("fs");
 var path = require("path");
 const axios = require("axios");
+const { getScope } = require("../util/franchiseScope");
 const { log } = require("console");
+
+// Requirement: refuse a booking when the fleet is fully booked for the
+// requested window. Set BLOCK_BOOKING_WHEN_FULL=false in .env to disable.
+const BLOCK_BOOKING_WHEN_FULL = process.env.BLOCK_BOOKING_WHEN_FULL !== 'false';
 
 module.exports.bookings = async (req, res) => {
   try {
@@ -35,7 +42,12 @@ module.exports.bookings = async (req, res) => {
         fine_amount,
         b_bk_id,
         b_bike_name,
+        b_source,
       } = fields;
+
+      // 'app' (default) or 'web'. Website bookings may skip the selfie —
+      // the customer is verified at pickup instead.
+      const bookingSource = b_source === 'web' ? 'web' : 'app';
 
       // Validate required fields
       if (
@@ -51,7 +63,7 @@ module.exports.bookings = async (req, res) => {
         return res.send({ result: false, message: "Insufficient parameters" });
       }
 
-      if (!files.selfie) {
+      if (!files.selfie && bookingSource === 'app') {
         logger.warn("Booking failed: Selfie image not uploaded");
         return res.send({
           result: false,
@@ -92,6 +104,50 @@ module.exports.bookings = async (req, res) => {
 
       const booking_date = moment().format("YYYY-MM-DD");
 
+      // Resolve which franchise this booking belongs to. A booking inherits
+      // the franchise of the centre it is picked up from.
+      let franchiseId = null;
+      try {
+        franchiseId = await franchiseModel.resolveFranchiseByLocation(
+          pickup_location,
+          drop_location,
+        );
+      } catch (frErr) {
+        logger.warn("Booking: could not resolve franchise: %s", frErr.message);
+      }
+
+      // Block the booking when no vehicle is free for the requested window.
+      // Feature-flagged via BLOCK_BOOKING_WHEN_FULL=false so this can be
+      // switched off instantly from .env if it causes friction.
+      if (BLOCK_BOOKING_WHEN_FULL) {
+        try {
+          const availableCount = await addbikeController.countAvailableBikes(
+            pickup_date,
+            pickup_time,
+            drop_date,
+            drop_time,
+            franchiseId,
+          );
+
+          if (availableCount === 0) {
+            logger.warn(
+              "Booking blocked: no vehicles available (user %s, %s %s -> %s %s, franchise %s)",
+              u_id, pickup_date, pickup_time, drop_date, drop_time, franchiseId,
+            );
+            return res.send({
+              result: false,
+              code: "NO_BIKES_AVAILABLE",
+              message:
+                "No vehicles are available for the selected date and time. Please choose another slot.",
+              available_count: 0,
+            });
+          }
+        } catch (availErr) {
+          // Never block a booking because the availability probe failed.
+          logger.error("Booking: availability check failed: %s", availErr.message);
+        }
+      }
+
       // Add booking to DB
       const booking = await model.Addbooking(
         u_id,
@@ -108,6 +164,8 @@ module.exports.bookings = async (req, res) => {
         booking_date,
         b_bk_id || null,
         b_bike_name || null,
+        franchiseId,
+        bookingSource,
       );
 
       if (booking.affectedRows === 0) {
@@ -296,6 +354,14 @@ module.exports.listbooking = async (req, res) => {
       params.push(Number(u_id));
       where.push(`b.b_payment_status = ?`);
       params.push("paid");
+    }
+
+    // Franchise (tenant) restriction — a franchise-admin only ever sees
+    // their own franchise's bookings.
+    const scope = getScope(req.user, "b.b_franchise_id");
+    if (scope.clause) {
+      where.push(scope.clause);
+      params.push(...scope.params);
     }
 
     const condition = where.length ? `WHERE ${where.join(" AND ")}` : "";

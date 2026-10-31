@@ -3,20 +3,49 @@ const ExcelJS = require('exceljs');
 const moment = require('moment');
 const logger = require('../util/logger');
 const { sendNightlyPaymentReport } = require('../util/nightlyPaymentReport');
+const { getScope, isFranchiseAdmin } = require('../util/franchiseScope');
+const {
+    addManualPaymentsSheet, addPenaltiesSheet, addSwapsSheet,
+} = require('../util/reportWorkbook');
 
-function buildCondition(from_date, to_date) {
+/**
+ * Build the WHERE clause for the payment report.
+ *
+ * Returns the clause plus the matching params so every value is
+ * parameterised (no interpolation of dates or ids into SQL).
+ */
+function buildCondition(from_date, to_date, user) {
     const parts = [];
-    if (from_date) parts.push(`DATE(b.booking_date) >= '${from_date}'`);
-    if (to_date)   parts.push(`DATE(b.booking_date) <= '${to_date}'`);
-    return parts.length ? `WHERE ${parts.join(' AND ')}` : '';
+    const params = [];
+
+    if (from_date) {
+        parts.push(`DATE(b.booking_date) >= ?`);
+        params.push(from_date);
+    }
+    if (to_date) {
+        parts.push(`DATE(b.booking_date) <= ?`);
+        params.push(to_date);
+    }
+
+    // Franchise (tenant) restriction.
+    const scope = getScope(user, 'b.b_franchise_id');
+    if (scope.clause) {
+        parts.push(scope.clause);
+        params.push(...scope.params);
+    }
+
+    return {
+        clause: parts.length ? `WHERE ${parts.join(' AND ')}` : '',
+        params,
+    };
 }
 
 // ─── JSON list (for the admin table view) ────────────────────────────────────
 module.exports.paymentReportList = async (req, res) => {
     try {
         const { from_date, to_date } = req.body || {};
-        const condition = buildCondition(from_date, to_date);
-        const data = await model.getPaymentReport(condition);
+        const { clause, params } = buildCondition(from_date, to_date, req.user);
+        const data = await model.getPaymentReport(clause, params);
         return res.send({ result: true, message: 'Payment report data', list: data });
     } catch (error) {
         logger.error('Payment report list error: %s', error.message);
@@ -28,8 +57,8 @@ module.exports.paymentReportList = async (req, res) => {
 module.exports.paymentReportExcel = async (req, res) => {
     try {
         const { from_date, to_date } = req.body || {};
-        const condition = buildCondition(from_date, to_date);
-        const rows = await model.getPaymentReport(condition);
+        const { clause, params } = buildCondition(from_date, to_date, req.user);
+        const rows = await model.getPaymentReport(clause, params);
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'EasyGo Admin';
@@ -41,6 +70,8 @@ module.exports.paymentReportExcel = async (req, res) => {
         sheet.columns = [
             { header: 'Booking ID',      key: 'b_id',               width: 12 },
             { header: 'Booking Date',    key: 'booking_date',        width: 16 },
+            { header: 'Source',          key: 'b_source',            width: 10 },
+            { header: 'Franchise',       key: 'franchise_name',      width: 18 },
             { header: 'Customer Name',   key: 'u_name',              width: 20 },
             { header: 'Mobile',          key: 'u_mobile',            width: 14 },
             { header: 'Email',           key: 'u_email',             width: 26 },
@@ -69,6 +100,7 @@ module.exports.paymentReportExcel = async (req, res) => {
             { header: 'GPay Ref',        key: 'deposit_gpay_ref',    width: 22 },
             { header: 'Returned At',     key: 'deposit_returned_at', width: 18 },
             { header: 'Returned By',     key: 'deposit_returned_by', width: 16 },
+            { header: 'Manual Pmts (Rs)', key: 'manual_payment_total', width: 16 },
         ];
 
         // ── Style header row ──────────────────────────────────────────────────
@@ -96,6 +128,8 @@ module.exports.paymentReportExcel = async (req, res) => {
             const dataRow = sheet.addRow({
                 b_id:               row.b_id,
                 booking_date:       row.booking_date  ? moment(row.booking_date).format('DD/MM/YYYY')  : '',
+                b_source:           row.b_source || 'app',
+                franchise_name:     row.franchise_name || '',
                 u_name:             row.u_name        || '',
                 u_mobile:           row.u_mobile      || '',
                 u_email:            row.u_email       || '',
@@ -125,6 +159,7 @@ module.exports.paymentReportExcel = async (req, res) => {
                 deposit_gpay_ref:   row.deposit_gpay_ref    || '',
                 deposit_returned_at: row.deposit_returned_at ? moment(row.deposit_returned_at).format('DD/MM/YYYY HH:mm') : '',
                 deposit_returned_by: row.deposit_returned_by || '',
+                manual_payment_total: parseFloat(row.manual_payment_total || 0),
             });
 
             const fillColor = i % 2 === 0 ? 'FFFFFFFF' : 'FFF1F5FF';
@@ -158,6 +193,7 @@ module.exports.paymentReportExcel = async (req, res) => {
                 0
             );
             const grandTotal   = sum('b_total_amount');
+            const totalManual  = sum('manual_payment_total');
 
             const totalsRow = sheet.addRow({
                 b_id:          'TOTAL',
@@ -166,6 +202,7 @@ module.exports.paymentReportExcel = async (req, res) => {
                 rent_deposit:  parseFloat(totalDeposit.toFixed(2)),
                 b_fine_amount: parseFloat(totalFine.toFixed(2)),
                 b_total_amount:parseFloat(grandTotal.toFixed(2)),
+                manual_payment_total: parseFloat(totalManual.toFixed(2)),
             });
             totalsRow.eachCell((cell) => {
                 cell.fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } };
@@ -176,6 +213,49 @@ module.exports.paymentReportExcel = async (req, res) => {
                     right:  { style: 'thin', color: { argb: 'FFE0E0E0' } },
                 };
             });
+        }
+
+        // ── Extra sheets: offline collections, penalties, swaps ───────────────
+        // Requirement: "All deductions, additional payments and outstanding
+        // balances must be reflected in the reports."
+        try {
+            const manualPaymentModel = require('../model/manualPayment');
+            const penaltyModel = require('../model/penalty');
+            const swapModel = require('../model/swap');
+
+            const franchiseId = isFranchiseAdmin(req.user)
+                ? Number(req.user.franchise_id)
+                : null;
+
+            const manualPayments = await manualPaymentModel.listManualPayments({
+                from_date: from_date || null,
+                to_date: to_date || null,
+                franchise_id: franchiseId,
+            });
+            if (manualPayments.length) {
+                addManualPaymentsSheet(workbook, manualPayments);
+            }
+
+            const penalties = await penaltyModel.listPenalties({
+                from_date: from_date || null,
+                to_date: to_date || null,
+                franchise_id: franchiseId,
+            });
+            if (penalties.length) {
+                addPenaltiesSheet(workbook, penalties);
+            }
+
+            const swaps = await swapModel.listSwaps({
+                from_date: from_date || null,
+                to_date: to_date || null,
+                franchise_id: franchiseId,
+            });
+            if (swaps.length) {
+                addSwapsSheet(workbook, swaps);
+            }
+        } catch (extraErr) {
+            // The main report is still valid without the extra sheets.
+            logger.error('Payment report extra sheets failed: %s', extraErr.message);
         }
 
         const fromLabel = from_date || 'all';

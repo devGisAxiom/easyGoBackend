@@ -1,6 +1,7 @@
 const model = require('../model/depositReturn');
 const bookingModel = require('../model/booking');
 const logger = require('../util/logger');
+const { assertFranchiseAccess } = require('../util/franchiseScope');
 
 module.exports.addDepositReturn = async (req, res) => {
     try {
@@ -39,6 +40,18 @@ module.exports.addDepositReturn = async (req, res) => {
         if (!booking || booking.length === 0) {
             logger.warn('addDepositReturn: booking %s not found', bookingId);
             return res.send({ result: false, message: 'Booking not found' });
+        }
+
+        // Franchise guard — a franchise-admin must not record refunds against
+        // another franchise's booking.
+        const access = assertFranchiseAccess(req.user, booking[0].b_franchise_id);
+        if (!access.allowed) {
+            logger.warn('addDepositReturn denied: booking %s belongs to another franchise', bookingId);
+            return res.send({
+                result: false,
+                code: 'FRANCHISE_FORBIDDEN',
+                message: access.message,
+            });
         }
 
         // Check if deposit already returned for this booking
