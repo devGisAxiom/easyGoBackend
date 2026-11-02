@@ -144,14 +144,81 @@ module.exports.assignUserToFranchise = async (u_id, fr_id) => {
     ]);
 };
 
-module.exports.listFranchiseAdmins = async (fr_id = null) => {
-    const where = fr_id ? 'WHERE u_franchise_id = ?' : '';
-    const params = fr_id ? [fr_id] : [];
+/**
+ * Create a brand-new franchise-admin login.
+ *
+ * This is the entry point for onboarding a franchise: the head office
+ * creates the login, and the franchise owner signs in with it to operate
+ * their own franchise.
+ */
+module.exports.createFranchiseAdmin = async (fields) => {
+    const {
+        name, email, mobile, password, franchise_id, hashed_password,
+    } = fields;
+
+    const Query = `INSERT INTO user
+        (u_name, u_email, u_password, u_mobile, u_joindate, u_role,
+         u_status, u_email_verify, u_franchise_id)
+        VALUES (?,?,?,?,?,?,?,?,?)`;
+
+    return await query(Query, [
+        name,
+        email,
+        hashed_password,
+        mobile,
+        fields.joined_date,
+        'franchise_admin',
+        'active',
+        'true',
+        franchise_id,
+    ]);
+};
+
+/**
+ * Is this email or mobile already taken by any user?
+ * Used to reject a duplicate franchise-admin login.
+ */
+module.exports.checkUserExists = async (email, mobile) => {
+    const Query = `SELECT u_id, u_email, u_mobile, u_role FROM user
+                   WHERE u_email = ? OR u_mobile = ? LIMIT 1`;
+    const data = await query(Query, [email, mobile]);
+    return Array.isArray(data) ? data[0] : data;
+};
+
+/**
+ * List the admins that can be assigned to a franchise.
+ *
+ * Without `fr_id` this returns every admin-side user (head-office admins
+ * plus the ones already tied to a franchise) so the head office has someone
+ * to pick when assigning. With `fr_id` it returns the admins already in that
+ * franchise together with the still-unassigned ones.
+ */
+module.exports.listFranchiseAdmins = async (fr_id = null, search = null) => {
+    const conditions = [];
+    const params = [];
+
+    if (fr_id) {
+        conditions.push(`(u.u_franchise_id = ? OR u.u_role = 'admin')`);
+        params.push(fr_id);
+    } else {
+        conditions.push(`u.u_role IN ('admin', 'franchise_admin')`);
+    }
+
+    if (search) {
+        conditions.push('(u.u_name LIKE ? OR u.u_email LIKE ? OR u.u_mobile LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
     const Query = `
-        SELECT u_id, u_name, u_email, u_mobile, u_franchise_id, u_status, u_joindate
-        FROM user
-        WHERE u_role = 'franchise_admin' ${where}
-        ORDER BY u_id ASC
+        SELECT u.u_id, u.u_name, u.u_email, u.u_mobile, u.u_franchise_id,
+               u.u_status, u.u_joindate, u.u_role,
+               fr.fr_name AS franchise_name
+        FROM user u
+        LEFT JOIN franchises fr ON fr.fr_id = u.u_franchise_id
+        ${where}
+        ORDER BY u.u_role ASC, u.u_name ASC
     `;
     return await query(Query, params);
 };

@@ -197,7 +197,7 @@ module.exports.deleteFranchise = async (req, res) => {
  */
 module.exports.listFranchiseAdmins = async (req, res) => {
     try {
-        const { fr_id } = req.body || {};
+        const { fr_id, search } = req.body || {};
 
         if (isFranchiseAdmin(req.user)) {
             const list = await model.listFranchiseAdmins(req.user.franchise_id);
@@ -209,7 +209,10 @@ module.exports.listFranchiseAdmins = async (req, res) => {
             });
         }
 
-        const list = await model.listFranchiseAdmins(fr_id ? Number(fr_id) : null);
+        const list = await model.listFranchiseAdmins(
+            fr_id ? Number(fr_id) : null,
+            search ? String(search).trim() : null,
+        );
         return res.send({
             result: true,
             message: list.length ? 'Franchise admins retrieved' : 'No data',
@@ -218,6 +221,104 @@ module.exports.listFranchiseAdmins = async (req, res) => {
         });
     } catch (error) {
         logger.error('listFranchiseAdmins error: %s', error.message);
+        return res.send({ result: false, message: error.message });
+    }
+};
+
+/**
+ * Create a franchise-admin login.
+ *
+ * The head office creates this from the Franchises page; the franchise owner
+ * then signs in with it and only ever sees their own franchise.
+ */
+module.exports.addFranchiseAdmin = async (req, res) => {
+    try {
+        const {
+            name, email, mobile, password, fr_id,
+        } = req.body || {};
+
+        if (!name || !email || !mobile || !password) {
+            return res.send({
+                result: false,
+                message: 'name, email, mobile and password are required',
+            });
+        }
+
+        if (!fr_id) {
+            return res.send({
+                result: false,
+                message: 'A franchise must be selected',
+            });
+        }
+
+        const cleanEmail = String(email).trim().toLowerCase();
+        const cleanMobile = String(mobile).trim();
+        const cleanName = String(name).trim();
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+            return res.send({ result: false, message: 'Enter a valid email address' });
+        }
+        if (!/^\d{10}$/.test(cleanMobile)) {
+            return res.send({ result: false, message: 'Enter a valid 10-digit mobile number' });
+        }
+        if (String(password).length < 6) {
+            return res.send({ result: false, message: 'Password must be at least 6 characters' });
+        }
+
+        // The franchise must exist and be active.
+        const franchise = await model.getFranchiseById(fr_id);
+        if (!franchise) {
+            return res.send({ result: false, message: 'Franchise not found' });
+        }
+        if (!franchise.fr_status || franchise.fr_status.toLowerCase() !== 'active') {
+            return res.send({
+                result: false,
+                message: 'Cannot add an admin to an inactive franchise',
+            });
+        }
+
+        // The login must be unique.
+        const existing = await model.checkUserExists(cleanEmail, cleanMobile);
+        if (existing) {
+            return res.send({
+                result: false,
+                message: 'A user with that email or mobile already exists',
+            });
+        }
+
+        const bcrypt = require('bcrypt');
+        const hashedPassword = await bcrypt.hash(String(password), 10);
+
+        const result = await model.createFranchiseAdmin({
+            name: cleanName,
+            email: cleanEmail,
+            mobile: cleanMobile,
+            password: String(password),
+            hashed_password: hashedPassword,
+            franchise_id: Number(fr_id),
+            joined_date: new Date().toISOString().slice(0, 10),
+        });
+
+        if (result.affectedRows === 0) {
+            return res.send({ result: false, message: 'Failed to create franchise admin' });
+        }
+
+        logger.info('Franchise admin created', {
+            u_id: result.insertId,
+            fr_id: Number(fr_id),
+            fr_code: franchise.fr_code,
+        });
+
+        return res.send({
+            result: true,
+            message: `Franchise admin created for ${franchise.fr_name}`,
+            u_id: result.insertId,
+            franchise_id: Number(fr_id),
+            franchise_name: franchise.fr_name,
+            email: cleanEmail,
+        });
+    } catch (error) {
+        logger.error('addFranchiseAdmin error: %s', error.message);
         return res.send({ result: false, message: error.message });
     }
 };

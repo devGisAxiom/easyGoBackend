@@ -4,9 +4,16 @@ const query = util.promisify(db.query).bind(db);
 
 
 module.exports.CheckUser = async (emailorphone_number, role) => {
+    // The admin panel posts role='admin' for every admin-side login. Accept
+    // the franchise-admin role for that same request — the login response
+    // carries the real role (and the franchise) back, so the panel knows
+    // which kind of admin has signed in without needing a second form.
+    const roles = role === 'admin' ? ['admin', 'franchise_admin'] : [role];
+    const placeholders = roles.map(() => '?').join(', ');
+
     var Query = `SELECT * FROM user
-    WHERE (u_email = ? OR u_mobile = ?) AND u_role = ? and u_status = 'active'`
-    var data = await query(Query, [emailorphone_number, emailorphone_number, role])
+    WHERE (u_email = ? OR u_mobile = ?) AND u_role IN (${placeholders}) and u_status = 'active'`
+    var data = await query(Query, [emailorphone_number, emailorphone_number, ...roles])
     return data;
 }
 

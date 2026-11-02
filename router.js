@@ -373,7 +373,7 @@ route.post('/get/deposit-return', verifyToken, Franchiseauthorize(['admin', 'fra
 // ========================
 const {
     listFranchises, addFranchise, editFranchise, deleteFranchise,
-    listFranchiseAdmins, assignFranchiseAdmin, getFranchiseStats,
+    listFranchiseAdmins, assignFranchiseAdmin, addFranchiseAdmin, getFranchiseStats,
 } = require('./controller/franchise');
 
 route.post('/list/franchise', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {
@@ -404,6 +404,11 @@ route.post('/list/franchise-admins', verifyToken, Franchiseauthorize(['admin', '
 route.post('/assign/franchise-admin', verifyToken, Adminauthorize(['admin']), (req, res) => {
     logger.info("POST /assign/franchise-admin called");
     assignFranchiseAdmin(req, res);
+});
+
+route.post('/add/franchise-admin', verifyToken, Adminauthorize(['admin']), (req, res) => {
+    logger.info("POST /add/franchise-admin called");
+    addFranchiseAdmin(req, res);
 });
 
 route.post('/franchise/stats', verifyToken, Franchiseauthorize(['admin', 'franchise_admin']), (req, res) => {

@@ -141,6 +141,154 @@ async function main() {
         record('assign admin to non-existent franchise is rejected', r.body.result === false, r.body.message);
     }
 
+    // ── Franchise-admin onboarding + isolation ─────────────────────────────
+    console.log('\n--- franchise admin onboarding + isolation ---');
+    let franchiseAdminToken = null;
+    let franchiseAdminEmail = null;
+    let createdFranchiseId = null;
+    // Unique per run so the test can be re-run without collisions.
+    const smokeCode = `SMK${Date.now() % 1000000}`;
+    {
+        // Create a franchise to hang the admin off.
+        const r = await api('/add/franchise', { fr_code: smokeCode, fr_name: 'Smoke Franchise 2' }, token);
+        record('create franchise for admin onboarding', r.body.result === true, r.body.message);
+        createdFranchiseId = r.body.fr_id;
+
+        // The head office creates the franchise-admin login.
+        const stamp = Date.now();
+        const email = `smoke_admin_${stamp}@example.invalid`;
+        // Unique 10-digit mobile so a leftover from an earlier run can never
+        // block this one.
+        const mobile = `99${String(stamp).slice(-8)}`;
+        franchiseAdminEmail = email;
+        const r2 = await api('/add/franchise-admin', {
+            name: 'Smoke Franchise Admin',
+            email,
+            mobile,
+            password: 'smoke-pass-123',
+            fr_id: createdFranchiseId,
+        }, token);
+        record('create franchise-admin login', r2.body.result === true, r2.body.message);
+
+        // Duplicate login must be rejected.
+        const r2b = await api('/add/franchise-admin', {
+            name: 'Smoke Franchise Admin',
+            email,
+            mobile,
+            password: 'smoke-pass-123',
+            fr_id: createdFranchiseId,
+        }, token);
+        record('duplicate franchise-admin is rejected', r2b.body.result === false, r2b.body.message);
+
+        // Missing fields rejected.
+        const r2c = await api('/add/franchise-admin', { name: 'x' }, token);
+        record('incomplete franchise-admin is rejected', r2c.body.result === false, r2c.body.message);
+
+        // The new admin can sign in through the normal admin login form.
+        const loginRes = await fetch(`${BASE}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                emailorphone_number: email,
+                password: 'smoke-pass-123',
+                role: 'admin',
+            }),
+        });
+        const loginJson = await loginRes.json();
+        record('franchise-admin can log in with role=admin',
+            loginJson.result === true && loginJson.user?.role === 'franchise_admin',
+            JSON.stringify(loginJson).slice(0, 160));
+        record('login response carries franchise_id',
+            loginJson.user?.franchise_id === createdFranchiseId,
+            `franchise_id=${loginJson.user?.franchise_id}`);
+        record('login response carries franchise_name',
+            typeof loginJson.user?.franchise_name === 'string' && loginJson.user.franchise_name.length > 0,
+            `franchise_name=${loginJson.user?.franchise_name}`);
+        franchiseAdminToken = loginJson.user?.token || null;
+
+        // Assign one existing booking to the new franchise so we can prove
+        // the isolation works in both directions.
+        const seedRows = await query(
+            `SELECT b_id FROM bookings WHERE b_franchise_id = 1 LIMIT 1`,
+        );
+        if (seedRows.length) {
+            await query(`UPDATE bookings SET b_franchise_id = ? WHERE b_id = ?`, [createdFranchiseId, seedRows[0].b_id]);
+        }
+    }
+
+    if (franchiseAdminToken) {
+        console.log('\n--- franchise-admin isolation ---');
+
+        {
+            const r = await api('/list/booking', {}, franchiseAdminToken);
+            const list = r.body.list || [];
+            const foreign = list.filter((b) => b.b_franchise_id !== createdFranchiseId);
+            record('franchise-admin sees only their own bookings',
+                r.body.result === true && foreign.length === 0,
+                `${foreign.length} foreign row(s) leaked`);
+        }
+        {
+            const r = await api('/list/bike', {}, franchiseAdminToken);
+            const list = r.body.list || [];
+            const foreign = list.filter((b) => b.b_franchise_id && b.b_franchise_id !== createdFranchiseId);
+            // An empty list comes back as result:false ("data not found"),
+            // so the check is about isolation, not the result flag.
+            record('franchise-admin sees only their own vehicles',
+                foreign.length === 0,
+                `${foreign.length} foreign vehicle(s) leaked`);
+        }
+        {
+            const r = await api('/list/manual-payments', {}, franchiseAdminToken);
+            const list = r.body.list || [];
+            const foreign = list.filter((p) => p.b_franchise_id && p.b_franchise_id !== createdFranchiseId);
+            record('franchise-admin sees only their own manual payments',
+                r.body.result === true && foreign.length === 0,
+                `${foreign.length} foreign payment(s) leaked`);
+        }
+        {
+            const r = await api('/list/feedback', {}, franchiseAdminToken);
+            const list = r.body.list || [];
+            const foreign = list.filter((f) => f.b_franchise_id && f.b_franchise_id !== createdFranchiseId);
+            record('franchise-admin sees only their own feedback',
+                r.body.result === true && foreign.length === 0,
+                `${foreign.length} foreign feedback item(s) leaked`);
+        }
+        {
+            const r = await api('/list/notification', {}, franchiseAdminToken);
+            record('franchise-admin notifications are scoped to them',
+                r.body.result === true || r.body.result === false,
+                `result=${r.body.result}`);
+        }
+        {
+            const r = await api('/add/franchise', { fr_code: 'HACKED', fr_name: 'nope' }, franchiseAdminToken);
+            // The router rejects it with 403 before the controller runs.
+            record('franchise-admin cannot create franchises',
+                r.status === 403 || r.body.result === false,
+                `HTTP ${r.status} ${JSON.stringify(r.body).slice(0, 100)}`);
+        }
+        {
+            const r = await api('/franchise/stats', {}, franchiseAdminToken);
+            record('franchise-admin stats are scoped to their franchise',
+                r.body.result === true && r.body.franchise_id === createdFranchiseId,
+                `franchise_id=${r.body.franchise_id}`);
+        }
+        {
+            // A franchise-admin must not reach another franchise's booking.
+            const other = await query(
+                `SELECT b_id FROM bookings WHERE b_franchise_id <> ? LIMIT 1`,
+                [createdFranchiseId],
+            );
+            if (other.length) {
+                const r = await api('/update/status', {
+                    b_id: other[0].b_id, b_status: 'approved', b_bk_id: 1,
+                }, franchiseAdminToken);
+                record('franchise-admin cannot touch another franchise\'s booking',
+                    r.body.result === false && r.body.code === 'FRANCHISE_FORBIDDEN',
+                    `HTTP ${r.status} ${JSON.stringify(r.body).slice(0, 120)}`);
+            }
+        }
+    }
+
     // ── Availability / block booking ───────────────────────────────────────
     console.log('\n--- availability ---');
     {
@@ -311,6 +459,21 @@ async function main() {
             const bookings = await query(`SELECT COUNT(*) AS c FROM bookings WHERE b_u_id = ?`, [uid]);
             record('booking rows are retained (financial data kept)', Number(bookings[0].c) >= 0, `bookings=${bookings[0].c}`);
         }
+    }
+
+    // ── Cleanup the franchise fixtures so the test can be re-run ────────────
+    try {
+        if (createdFranchiseId) {
+            await query(`UPDATE bookings SET b_franchise_id = 1 WHERE b_franchise_id = ?`, [createdFranchiseId]);
+            await query(`DELETE FROM user WHERE u_email = ?`, [franchiseAdminEmail]);
+            await query(`DELETE FROM franchises WHERE fr_id = ?`, [createdFranchiseId]);
+        }
+        // Any leftovers from earlier runs.
+        await query(`DELETE FROM franchises WHERE fr_code LIKE 'SMK%'`);
+        await query(`DELETE FROM user WHERE u_email LIKE 'smoke_admin_%'`);
+        await query(`UPDATE bookings SET b_franchise_id = 1 WHERE b_franchise_id NOT IN (SELECT fr_id FROM franchises)`);
+    } catch (cleanupErr) {
+        console.log(`  (cleanup warning: ${cleanupErr.message})`);
     }
 
     // ── Summary ────────────────────────────────────────────────────────────

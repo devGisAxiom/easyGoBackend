@@ -1,7 +1,7 @@
 const model = require('../model/feedback');
 const bookingModel = require('../model/booking');
 const logger = require('../util/logger');
-const { assertFranchiseAccess } = require('../util/franchiseScope');
+const { assertFranchiseAccess, isFranchiseAdmin } = require('../util/franchiseScope');
 
 /**
  * Customer feedback.
@@ -78,19 +78,27 @@ module.exports.addFeedback = async (req, res) => {
 
 /**
  * List feedback (admin).
+ *
+ * A franchise-admin only sees feedback attached to their own franchise's
+ * bookings; feedback with no booking stays with the head office.
  */
 module.exports.listFeedback = async (req, res) => {
     try {
         const { status, type, from_date, to_date } = req.body || {};
+
+        const franchiseId = isFranchiseAdmin(req.user)
+            ? Number(req.user.franchise_id)
+            : null;
 
         const list = await model.listFeedback({
             status: status || null,
             type: type || null,
             from_date: from_date || null,
             to_date: to_date || null,
+            franchise_id: franchiseId,
         });
 
-        const stats = await model.getStats();
+        const stats = await model.getStats({ franchise_id: franchiseId });
 
         return res.send({
             result: true,
